@@ -19,6 +19,14 @@ async def resolve_member(guild,user_id):
     except (discord.NotFound,discord.Forbidden,discord.HTTPException):return None
 
 def staff(interaction): return interaction.user.guild_permissions.manage_guild
+def moderator(interaction):
+    permissions=interaction.user.guild_permissions
+    return permissions.moderate_members or permissions.manage_messages or permissions.manage_guild
+def timeouter(interaction):return interaction.user.guild_permissions.moderate_members or interaction.user.guild_permissions.manage_guild
+def kicker(interaction):return interaction.user.guild_permissions.kick_members or interaction.user.guild_permissions.manage_guild
+def banner(interaction):return interaction.user.guild_permissions.ban_members or interaction.user.guild_permissions.manage_guild
+def purger(interaction):return interaction.user.guild_permissions.manage_messages or interaction.user.guild_permissions.manage_guild
+def expression_manager(interaction):return interaction.user.guild_permissions.manage_expressions or interaction.user.guild_permissions.manage_guild
 def publisher(interaction):
     permissions=interaction.user.guild_permissions
     return permissions.manage_messages or permissions.manage_guild
@@ -69,13 +77,31 @@ async def action_log(guild,event,member,title,description="",fields=None,color=0
 
 @bot.tree.error
 async def command_error(interaction,error):
-    if isinstance(error,app_commands.CommandOnCooldown):text=f"Please wait {error.retry_after:.0f} seconds before using that again."
-    elif isinstance(error,app_commands.CheckFailure):text="You do not have permission to use that command."
-    else:text="That command could not be completed. Check the bot's permissions and try again."
+    original=getattr(error,"original",error); command=getattr(getattr(interaction,"command",None),"name","command")
+    hints={"timeout":"Moderate Members","kick":"Kick Members","ban":"Ban Members","purge":"Manage Messages and Read Message History","stealemoji":"Create Expressions","event":"Manage Events","announce":"View Channel, Send Messages, and Embed Links","poll":"View Channel, Send Messages, and Embed Links"}
+    if isinstance(original,app_commands.CommandOnCooldown):text=f"Please wait {original.retry_after:.0f} seconds before using that again."
+    elif isinstance(original,app_commands.CheckFailure):text="Your Discord account does not have permission to use this command."
+    elif isinstance(original,discord.Forbidden):text=f"Discord denied `/{command}`. Jane Doe needs **{hints.get(command,'the required Discord permission')}**, and its role must be above the target role/member."
+    elif isinstance(original,discord.NotFound):text=f"`/{command}` could not find the selected member, channel, message, or emoji. It may have been deleted."
+    elif isinstance(original,discord.HTTPException):text=f"Discord rejected `/{command}`: {original.text or str(original)}"
+    elif isinstance(original,FileNotFoundError):text=f"`/{command}` uses an uploaded file that is no longer stored. Upload it again on the dashboard."
+    elif isinstance(original,requests.RequestException):text=f"`/{command}` could not download the requested file. Check the URL and try again."
+    elif isinstance(original,(ValueError,RuntimeError)):text=str(original)
+    else:
+        text=f"`/{command}` failed because of **{type(original).__name__}**. The error was logged; this is not automatically a permissions problem."
+    print(f"Command /{command} failed: {type(original).__name__}: {original}")
     try:
         if interaction.response.is_done():await interaction.followup.send(text,ephemeral=True)
         else:await interaction.response.send_message(text,ephemeral=True)
     except discord.HTTPException:pass
+
+def moderation_problem(interaction,member,permission):
+    if member.id==interaction.user.id:return "You cannot use this moderation command on yourself."
+    if member.id==interaction.guild.owner_id:return "The server owner cannot be moderated."
+    if interaction.user.id!=interaction.guild.owner_id and member.top_role>=interaction.user.top_role:return "Your highest role must be above the member's highest role."
+    if member.top_role>=interaction.guild.me.top_role:return "Move Jane Doe's role above the member's highest role."
+    if not getattr(interaction.guild.me.guild_permissions,permission,False):return f"Jane Doe needs the **{permission.replace('_',' ').title()}** permission."
+    return None
 
 class TicketPanel(discord.ui.View):
     def __init__(self,key="default",cfg=None):
@@ -228,6 +254,12 @@ async def get_confession_thread(guild,row,cfg):
 async def publish_confession(guild,content,attachment_urls=None,attachment_payloads=None):
     cfg=storage.get_setting(guild.id,"confessions",{}); channel=guild.get_channel(int(cfg.get("channel_id") or 0))
     if not cfg.get("enabled") or not channel:raise RuntimeError("Confessions are not configured here.")
+    permissions=channel.permissions_for(guild.me); missing=[]
+    if not permissions.view_channel:missing.append("View Channel")
+    if not permissions.send_messages:missing.append("Send Messages")
+    if not permissions.embed_links:missing.append("Embed Links")
+    if attachment_payloads and not permissions.attach_files:missing.append("Attach Files")
+    if missing:raise RuntimeError(f"Jane Doe needs **{', '.join(missing)}** in the configured confession channel.")
     attachment_urls=[str(x) for x in (attachment_urls or []) if x]; attachment_payloads=attachment_payloads or []; description=content.strip() if content else ""
     image_url=next((x for x in attachment_urls if re.search(r"\.(png|jpe?g|gif|webp)(\?|$)",x,re.I)),None)
     extra=[x for x in attachment_urls if x!=image_url]
@@ -528,7 +560,9 @@ async def send_gif_action(interaction,target,action):
     verbs={"hug":"hugs","kiss":"kisses","slap":"slaps","pat":"pats","cuddle":"cuddles with","bite":"bites"}
     chosen=random.choice(choices); content=f"{interaction.user.mention} {verbs[action]} {target.mention}"; color=(cfg.get("_colors") or {}).get(action) or "#2B2D31"; author=(cfg.get("_authors") or {}).get(action) or {}; edata={"color":color,"author":author.get("name") or "","author_icon":author.get("icon") or ""}
     if isinstance(chosen,dict) and chosen.get("asset"):
-        path=os.path.join(os.path.dirname(config.DB_PATH),"uploads",os.path.basename(chosen["asset"])); file=discord.File(path,filename=os.path.basename(path)); await interaction.response.send_message(content=content,embed=make_embed({**edata,"image":f"attachment://{os.path.basename(path)}"}),file=file)
+        path=os.path.join(os.path.dirname(config.DB_PATH),"uploads",os.path.basename(chosen["asset"]))
+        if not os.path.isfile(path):return await interaction.response.send_message(f"The saved /{action} GIF file is missing. Upload it again in Confessions & GIFs.",ephemeral=True)
+        file=discord.File(path,filename=os.path.basename(path)); await interaction.response.send_message(content=content,embed=make_embed({**edata,"image":f"attachment://{os.path.basename(path)}"}),file=file)
     else:await interaction.response.send_message(content=content,embed=make_embed({**edata,"image":str(chosen)}))
 
 @bot.tree.command(description="Hug somebody")
@@ -553,23 +587,30 @@ async def birthday(interaction:discord.Interaction,month:app_commands.Range[int,
     await interaction.response.send_message(f"Birthday saved as **{month}/{day}**.",ephemeral=True)
 
 @bot.tree.command(description="Warn a member")
-@app_commands.check(staff)
+@app_commands.check(moderator)
+@app_commands.default_permissions(manage_messages=True)
 async def warn(interaction:discord.Interaction,member:discord.Member,reason:str):
     storage.execute("INSERT INTO warnings(guild_id,user_id,moderator_id,reason) VALUES(?,?,?,?)",(interaction.guild_id,member.id,interaction.user.id,reason)); await interaction.response.send_message(f"Warned {member.mention}: {reason}")
 
 @bot.tree.command(description="Timeout a member")
-@app_commands.check(staff)
+@app_commands.check(timeouter)
+@app_commands.default_permissions(moderate_members=True)
 async def timeout(interaction:discord.Interaction,member:discord.Member,minutes:app_commands.Range[int,1,40320],reason:str="No reason provided"):
+    if problem:=moderation_problem(interaction,member,"moderate_members"):return await interaction.response.send_message(problem,ephemeral=True)
     await member.timeout(timedelta(minutes=minutes),reason=reason); await interaction.response.send_message(f"Timed out {member.mention} for {minutes} minutes.")
 
 @bot.tree.command(description="Kick a member")
-@app_commands.check(staff)
+@app_commands.check(kicker)
+@app_commands.default_permissions(kick_members=True)
 async def kick(interaction:discord.Interaction,member:discord.Member,reason:str="No reason provided"):
+    if problem:=moderation_problem(interaction,member,"kick_members"):return await interaction.response.send_message(problem,ephemeral=True)
     await member.kick(reason=reason); await interaction.response.send_message(f"Kicked **{member}**: {reason}")
 
 @bot.tree.command(description="Ban a member")
-@app_commands.check(staff)
+@app_commands.check(banner)
+@app_commands.default_permissions(ban_members=True)
 async def ban(interaction:discord.Interaction,member:discord.Member,reason:str="No reason provided"):
+    if problem:=moderation_problem(interaction,member,"ban_members"):return await interaction.response.send_message(problem,ephemeral=True)
     await member.ban(reason=reason); await interaction.response.send_message(f"Banned **{member}**: {reason}")
 
 @bot.tree.command(description="Create a scheduled server event")
@@ -577,22 +618,33 @@ async def ban(interaction:discord.Interaction,member:discord.Member,reason:str="
 @app_commands.default_permissions(manage_events=True)
 @app_commands.describe(starts_in_minutes="How many minutes from now",duration_minutes="How long it lasts",location="Voice channel name, game, URL, etc.")
 async def event(interaction:discord.Interaction,name:str,starts_in_minutes:app_commands.Range[int,1,10080],duration_minutes:app_commands.Range[int,15,1440],location:str,description:str=""):
+    if not interaction.guild.me.guild_permissions.manage_events:return await interaction.response.send_message("Jane Doe needs the **Manage Events** permission.",ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
     start=datetime.now(timezone.utc)+timedelta(minutes=starts_in_minutes)
     created=await interaction.guild.create_scheduled_event(name=name,description=description or None,start_time=start,end_time=start+timedelta(minutes=duration_minutes),entity_type=discord.EntityType.external,privacy_level=discord.PrivacyLevel.guild_only,location=location,reason=f"Created by {interaction.user}")
-    await interaction.response.send_message(f"Event created: **{created.name}**")
+    await interaction.followup.send(f"Event created: **{created.name}**",ephemeral=True)
 
 @bot.tree.command(description="Delete a number of recent messages")
-@app_commands.check(staff)
+@app_commands.check(purger)
+@app_commands.default_permissions(manage_messages=True)
 async def purge(interaction:discord.Interaction,amount:app_commands.Range[int,1,100]):
+    if not isinstance(interaction.channel,(discord.TextChannel,discord.Thread)):return await interaction.response.send_message("Use /purge in a text channel or thread.",ephemeral=True)
+    permissions=interaction.channel.permissions_for(interaction.guild.me); missing=[]
+    if not permissions.manage_messages:missing.append("Manage Messages")
+    if not permissions.read_message_history:missing.append("Read Message History")
+    if missing:return await interaction.response.send_message(f"Jane Doe needs **{' and '.join(missing)}** in this channel.",ephemeral=True)
     await interaction.response.defer(ephemeral=True); deleted=await interaction.channel.purge(limit=amount); await interaction.followup.send(f"Deleted {len(deleted)} messages.",ephemeral=True)
 
 @bot.tree.command(description="Copy a custom emoji into this server")
-@app_commands.check(staff)
+@app_commands.check(expression_manager)
+@app_commands.default_permissions(manage_expressions=True)
 async def stealemoji(interaction:discord.Interaction,emoji:str,name:str|None=None):
     match=re.search(r"<(a?):([A-Za-z0-9_]+):(\d+)>",emoji)
     if not match:return await interaction.response.send_message("Paste a custom Discord emoji such as `<:name:123>`.",ephemeral=True)
-    ext="gif" if match.group(1) else "png"; data=requests.get(f"https://cdn.discordapp.com/emojis/{match.group(3)}.{ext}",timeout=10).content
-    created=await interaction.guild.create_custom_emoji(name=name or match.group(2),image=data,reason=f"Stolen by {interaction.user}"); await interaction.response.send_message(f"Added {created}")
+    if not interaction.guild.me.guild_permissions.create_expressions:return await interaction.response.send_message("Jane Doe needs the **Create Expressions** permission.",ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    ext="gif" if match.group(1) else "png"; response=requests.get(f"https://cdn.discordapp.com/emojis/{match.group(3)}.{ext}",timeout=10); response.raise_for_status(); data=response.content
+    created=await interaction.guild.create_custom_emoji(name=name or match.group(2),image=data,reason=f"Stolen by {interaction.user}"); await interaction.followup.send(f"Added {created}",ephemeral=True)
 
 @bot.tree.command(description="Post a customizable announcement")
 @app_commands.check(publisher)
@@ -603,8 +655,13 @@ async def announce(interaction:discord.Interaction,title:str,description:str,cha
     if not isinstance(target,(discord.TextChannel,discord.Thread)):
         return await interaction.response.send_message("Choose a text channel for the announcement.",ephemeral=True)
     permissions=target.permissions_for(interaction.guild.me)
-    if not permissions.view_channel or not permissions.send_messages:
-        return await interaction.response.send_message(f"I cannot send messages in {target.mention}.",ephemeral=True)
+    missing=[]
+    if not permissions.view_channel:missing.append("View Channel")
+    if isinstance(target,discord.Thread):
+        if not permissions.send_messages_in_threads:missing.append("Send Messages in Threads")
+    elif not permissions.send_messages:missing.append("Send Messages")
+    if not permissions.embed_links:missing.append("Embed Links")
+    if missing:return await interaction.response.send_message(f"Jane Doe needs **{', '.join(missing)}** in {target.mention}.",ephemeral=True)
     edata={"title":title,"description":description,"color":color,"footer":footer,"image":image.url if image else image_url,"thumbnail":thumbnail_url}
     if not anonymous:edata.update(author=interaction.user.display_name,author_icon=str(interaction.user.display_avatar.url))
     await interaction.response.defer(ephemeral=True)
@@ -621,8 +678,13 @@ async def poll(interaction:discord.Interaction,question:str,option_1:str,option_
     if not isinstance(target,(discord.TextChannel,discord.Thread)):
         return await interaction.response.send_message("Choose a text channel for the poll.",ephemeral=True)
     permissions=target.permissions_for(interaction.guild.me)
-    if not permissions.view_channel or not permissions.send_messages:
-        return await interaction.response.send_message(f"I cannot send messages in {target.mention}.",ephemeral=True)
+    missing=[]
+    if not permissions.view_channel:missing.append("View Channel")
+    if isinstance(target,discord.Thread):
+        if not permissions.send_messages_in_threads:missing.append("Send Messages in Threads")
+    elif not permissions.send_messages:missing.append("Send Messages")
+    if not permissions.embed_links:missing.append("Embed Links")
+    if missing:return await interaction.response.send_message(f"Jane Doe needs **{', '.join(missing)}** in {target.mention}.",ephemeral=True)
     key=secrets.token_hex(6); cfg={"options":options,"question":question}; storage.set_setting(interaction.guild_id,f"poll:{key}",cfg)
     view=PollView(key,options); bot.add_view(view); embed=make_embed({"title":question,"description":description,"color":color,"footer":footer or f"Poll by {interaction.user.display_name}","image":image_url,"thumbnail":thumbnail_url})
     await interaction.response.defer(ephemeral=True)
