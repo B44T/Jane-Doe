@@ -312,6 +312,12 @@ async def on_ready():
         for row in storage.rows("SELECT * FROM glue WHERE guild_id=? AND enabled=1",(guild.id,)):
             try:cfg=storage.get_setting(guild.id,f"glue_options:{row['channel_id']}",{}); restore(GlueTemplateView(row['channel_id'],cfg),f"glue:{row['channel_id']}")
             except Exception as e:failed+=1; print(f"Could not load glue:{row['channel_id']}: {type(e).__name__}: {e}")
+        # Confession messages use stable confession:* IDs rather than the
+        # generic action:* IDs. Restore their matching view after every restart.
+        confession_cfg=storage.get_setting(guild.id,"confessions",{})
+        for row in storage.rows("SELECT id,message_id FROM confessions WHERE guild_id=? AND message_id IS NOT NULL",(guild.id,)):
+            try:bot.add_view(ConfessionView(row["id"],confession_cfg),message_id=row["message_id"]); restored+=1
+            except Exception as e:failed+=1; print(f"Could not restore confession:{row['id']}: {type(e).__name__}: {e}")
     print(f"Restored {restored} persistent component handler(s)"+(f"; {failed} invalid configuration(s) skipped" if failed else ""))
     if not birthday_check.is_running(): birthday_check.start()
     if not giveaway_check.is_running(): giveaway_check.start()
@@ -352,6 +358,12 @@ async def on_interaction(interaction):
                 choice=choices[int(parts[2])]; role=interaction.guild.get_role(int(choice.get("role_id") or 0))
                 if role:
                     added=role not in interaction.user.roles; await (interaction.user.add_roles(role,reason="Recovered role button") if added else interaction.user.remove_roles(role,reason="Recovered role button")); return await interaction.followup.send(f"{role.mention} {'added' if added else 'removed'}.",ephemeral=True)
+        # Confession panels published by the bot are intentionally stateless:
+        # their key contains the confession ID, so they remain usable even if
+        # an old generic component configuration was lost.
+        if prefix=="action" and len(parts)>=3 and re.fullmatch(r"confession-\d+",parts[1]):
+            if int(parts[2])==0:return await interaction.response.send_modal(ConfessionSubmitModal())
+            if int(parts[2])==1:return await interaction.response.send_modal(ConfessionReplyModal(int(parts[1].split("-",1)[1])))
         if prefix in ("action","actionmenu") and len(parts)>=3:
             key,index=parts[1],int(parts[2]); cfg=storage.get_setting(guild_id,f"message_components:{key}",{})
             choices=(cfg.get("menus") or [])[index].get("options",[]) if prefix=="actionmenu" and index<len(cfg.get("menus") or []) else (cfg.get("buttons") or [])

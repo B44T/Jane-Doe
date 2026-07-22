@@ -476,7 +476,23 @@ def reaction_role(gid):
 def reaction_panel(gid):
     d=request.get_json(force=True); choices=[c for c in d.get("choices",[]) if c.get("label") and c.get("role_id")][:25]
     if not choices:return jsonify(error="Add at least one role choice."),400
-    d["choices"]=choices; channel=guild(gid).get_channel(int(d["channel_id"]))
+    d["choices"]=choices; g=guild(gid); channel=g.get_channel(int(d["channel_id"]))
+    if not isinstance(channel,(discord.TextChannel,discord.Thread)):return jsonify(error="Choose a text channel for the role panel."),400
+    invalid=[]
+    for choice in choices:
+        role=g.get_role(int(choice["role_id"]))
+        if not role or role.is_default() or role.managed or role>=g.me.top_role:invalid.append(choice["label"])
+    if invalid:return jsonify(error=f"Jane Doe cannot assign these roles: {', '.join(invalid)}. Move Jane Doe's role above them in Discord and do not use managed/integration roles."),403
+    permissions=channel.permissions_for(g.me); missing=[]
+    if not permissions.view_channel:missing.append("View Channel")
+    if isinstance(channel,discord.Thread):
+        if not permissions.send_messages_in_threads:missing.append("Send Messages in Threads")
+    elif not permissions.send_messages:missing.append("Send Messages")
+    if has_embed_content(d.get("embed")) and not permissions.embed_links:missing.append("Embed Links")
+    if d.get("mode")=="reactions":
+        if not permissions.add_reactions:missing.append("Add Reactions")
+        if not permissions.read_message_history:missing.append("Read Message History")
+    if missing:return jsonify(error=f"Jane Doe needs {', '.join(missing)} in #{channel.name}."),403
     if d.get("mode")=="reactions":
         usable=[c for c in choices if c.get("emoji")]
         if len(usable)!=len(choices):return jsonify(error="Reaction roles need an emoji for every role choice."),400
