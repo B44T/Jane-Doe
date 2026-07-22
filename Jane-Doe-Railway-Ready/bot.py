@@ -19,6 +19,12 @@ async def resolve_member(guild,user_id):
     except (discord.NotFound,discord.Forbidden,discord.HTTPException):return None
 
 def staff(interaction): return interaction.user.guild_permissions.manage_guild
+def publisher(interaction):
+    permissions=interaction.user.guild_permissions
+    return permissions.manage_messages or permissions.manage_guild
+def event_manager(interaction):
+    permissions=interaction.user.guild_permissions
+    return permissions.manage_events or permissions.manage_guild
 def component_emoji(value):
     if not value:return None
     try:return discord.PartialEmoji.from_str(str(value))
@@ -261,15 +267,17 @@ async def on_ready():
     await bot.change_presence(status=discord.Status.online,activity=discord.Game(name="Managing the server"))
     if not getattr(bot,"commands_synced",False):
         for command_name in storage.get_setting(0,"disabled_commands",[]):bot.tree.remove_command(command_name)
-        # Keep exactly one command scope. Older builds created guild copies,
-        # while earlier builds also had globals, which Discord displayed twice.
-        # Sync the globals, then explicitly delete every guild-scoped copy.
-        synced=await bot.tree.sync()
-        for guild in bot.guilds:
-            bot.tree.clear_commands(guild=guild)
-            await bot.tree.sync(guild=guild)
+        # Guild commands update immediately. Global command changes can remain
+        # cached for an hour and Discord reports those stale definitions as
+        # "outdated". Use the configured single-server scope when available.
+        if config.GUILD_ID:
+            target=discord.Object(id=config.GUILD_ID)
+            bot.tree.copy_global_to(guild=target)
+            synced=await bot.tree.sync(guild=target)
+        else:
+            synced=await bot.tree.sync()
         bot.commands_synced=True
-        print(f"Synced {len(synced)} global command(s) and deleted all duplicate server copies")
+        print(f"Synced {len(synced)} {'server' if config.GUILD_ID else 'global'} command(s)")
     bot.add_view(TicketControls()); restored=1; failed=0
     def restore(view,label):
         nonlocal restored,failed
@@ -541,7 +549,8 @@ async def ban(interaction:discord.Interaction,member:discord.Member,reason:str="
     await member.ban(reason=reason); await interaction.response.send_message(f"Banned **{member}**: {reason}")
 
 @bot.tree.command(description="Create a scheduled server event")
-@app_commands.check(staff)
+@app_commands.check(event_manager)
+@app_commands.default_permissions(manage_events=True)
 @app_commands.describe(starts_in_minutes="How many minutes from now",duration_minutes="How long it lasts",location="Voice channel name, game, URL, etc.")
 async def event(interaction:discord.Interaction,name:str,starts_in_minutes:app_commands.Range[int,1,10080],duration_minutes:app_commands.Range[int,15,1440],location:str,description:str=""):
     start=datetime.now(timezone.utc)+timedelta(minutes=starts_in_minutes)
@@ -562,7 +571,8 @@ async def stealemoji(interaction:discord.Interaction,emoji:str,name:str|None=Non
     created=await interaction.guild.create_custom_emoji(name=name or match.group(2),image=data,reason=f"Stolen by {interaction.user}"); await interaction.response.send_message(f"Added {created}")
 
 @bot.tree.command(description="Post a customizable announcement")
-@app_commands.check(staff)
+@app_commands.check(publisher)
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(channel="Where to post (defaults to this channel)",content="Normal text above the embed",title="Embed title",description="Embed body",color="Hex color, such as #5865F2",footer="Small text at the bottom",image_url="Large image URL",thumbnail_url="Small image URL",image="Upload a large image instead of using a URL")
 async def announce(interaction:discord.Interaction,title:str,description:str,channel:discord.TextChannel|None=None,content:str="",color:str="#5865F2",footer:str="",image_url:str="",thumbnail_url:str="",image:discord.Attachment|None=None):
     target=channel or interaction.channel
@@ -578,7 +588,8 @@ async def announce(interaction:discord.Interaction,title:str,description:str,cha
     await interaction.followup.send(f"Announcement posted in {target.mention}: {msg.jump_url}",ephemeral=True)
 
 @bot.tree.command(description="Create a customizable button poll")
-@app_commands.check(staff)
+@app_commands.check(publisher)
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(channel="Where to post (defaults to this channel)",description="Extra text below the question",color="Hex color, such as #5865F2",footer="Small text at the bottom",image_url="Large image URL",thumbnail_url="Small image URL",option_1="First choice",option_2="Second choice",option_3="Optional third choice",option_4="Optional fourth choice",option_5="Optional fifth choice")
 async def poll(interaction:discord.Interaction,question:str,option_1:str,option_2:str,channel:discord.TextChannel|None=None,description:str="Choose an option below.",color:str="#5865F2",footer:str="",image_url:str="",thumbnail_url:str="",option_3:str|None=None,option_4:str|None=None,option_5:str|None=None):
     target=channel or interaction.channel; options=[x.strip() for x in (option_1,option_2,option_3,option_4,option_5) if x and x.strip()]
