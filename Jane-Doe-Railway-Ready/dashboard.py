@@ -47,7 +47,9 @@ async def register_view(view):bot.add_view(view); return True
 
 @app.get("/")
 @protected
-def home(): return render_template("dashboard.html",guilds=guilds(),application_id=config.APPLICATION_ID)
+def home():
+    persistent_storage=not bool(os.getenv("RAILWAY_ENVIRONMENT")) or bool(os.getenv("RAILWAY_VOLUME_MOUNT_PATH",""))
+    return render_template("dashboard.html",guilds=guilds(),application_id=config.APPLICATION_ID,persistent_storage=persistent_storage)
 
 @app.get("/api/guild/<int:gid>/context")
 @protected

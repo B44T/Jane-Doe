@@ -191,7 +191,7 @@ class ActionButtonView(discord.ui.View):
                 self.add_item(discord.ui.Button(label=c.get("label","Open")[:80],emoji=emoji,style=discord.ButtonStyle.link,url=c["url"],row=i//5)); continue
             button=discord.ui.Button(label=c.get("label","Button")[:80],emoji=emoji,style=styles.get(c.get("style"),discord.ButtonStyle.secondary),custom_id=f"action:{key}:{i}",row=i//5)
             async def clicked(interaction,choice=c):
-                if choice.get("action")=="confession_submit":return await interaction.response.send_modal(ConfessionSubmitModal())
+                if choice.get("action")=="confession_submit":return await interaction.response.send_modal(ConfessionSubmitModal(interaction.channel_id))
                 if choice.get("action")=="confession_reply":return await interaction.response.send_modal(ConfessionReplyModal(int(choice.get("confession_id") or 0)))
                 if choice.get("action")=="role":
                     role=interaction.guild.get_role(int(choice.get("role_id") or 0))
@@ -219,7 +219,8 @@ class GlueTemplateView(discord.ui.View):
 
 class ConfessionSubmitModal(discord.ui.Modal,title="Submit an anonymous confession"):
     confession=discord.ui.TextInput(label="Confession",style=discord.TextStyle.paragraph,max_length=1800,required=True,placeholder="Your identity will not be shown.")
-    async def on_submit(self,interaction):await post_confession(interaction,str(self.confession))
+    def __init__(self,channel_id=None):super().__init__(); self.source_channel_id=int(channel_id or 0)
+    async def on_submit(self,interaction):await post_confession(interaction,str(self.confession),self.source_channel_id)
 
 class ConfessionReplyModal(discord.ui.Modal,title="Reply anonymously"):
     reply=discord.ui.TextInput(label="Reply",style=discord.TextStyle.paragraph,max_length=1800,required=True,placeholder="Your reply will be posted anonymously in the thread.")
@@ -231,7 +232,7 @@ class ConfessionView(discord.ui.View):
         super().__init__(timeout=None); self.confession_id=confession_id; cfg=cfg or {}
         submit=discord.ui.Button(label=(cfg.get("submit_label") or "Submit a confession")[:80],emoji=component_emoji(cfg.get("submit_emoji") or ""),style=discord.ButtonStyle.primary,custom_id="confession:submit")
         reply=discord.ui.Button(label=(cfg.get("reply_label") or "Reply anonymously")[:80],emoji=component_emoji(cfg.get("reply_emoji") or ""),style=discord.ButtonStyle.secondary,custom_id=f"confession:reply:{confession_id}")
-        async def submit_clicked(interaction):await interaction.response.send_modal(ConfessionSubmitModal())
+        async def submit_clicked(interaction):await interaction.response.send_modal(ConfessionSubmitModal(interaction.channel_id))
         async def reply_clicked(interaction):await interaction.response.send_modal(ConfessionReplyModal(confession_id))
         submit.callback=submit_clicked; reply.callback=reply_clicked; self.add_item(submit); self.add_item(reply)
 
@@ -279,9 +280,18 @@ async def publish_confession(guild,content,attachment_urls=None,attachment_paylo
     except (discord.Forbidden,discord.HTTPException):pass
     return cid
 
-async def post_confession(interaction,content):
-    cfg=storage.get_setting(interaction.guild_id,"confessions",{}); channel=interaction.guild.get_channel(int(cfg.get("channel_id") or 0))
-    if not cfg.get("enabled") or not channel:return await interaction.response.send_message("Confessions are not configured here.",ephemeral=True)
+async def post_confession(interaction,content,source_channel_id=0):
+    cfg=storage.get_setting(interaction.guild_id,"confessions",{}); source_channel=interaction.guild.get_channel(int(source_channel_id or 0))
+    # A Discord panel can outlive an ephemeral Railway filesystem. Preserve
+    # usability by rebuilding safe defaults from the panel's own channel.
+    if not cfg and isinstance(source_channel,(discord.TextChannel,discord.Thread)):
+        cfg={"enabled":True,"channel_id":str(source_channel.id),"content":"","submit_label":"Submit a confession","reply_label":"Reply anonymously","thread_name":"Confession #{id} replies","reply_title":"Anonymous reply #{reply_id}","reply_footer":"Reply to confession #{id}","embed":{"title":"Anonymous confession #{id}","color":"#2b2d31"}}
+        storage.set_setting(interaction.guild_id,"confessions",cfg)
+        print(f"Recovered confession settings for guild {interaction.guild_id} from panel channel {source_channel.id}")
+    channel=interaction.guild.get_channel(int(cfg.get("channel_id") or 0))
+    if cfg.get("enabled") and not channel and isinstance(source_channel,(discord.TextChannel,discord.Thread)):
+        cfg["channel_id"]=str(source_channel.id); storage.set_setting(interaction.guild_id,"confessions",cfg); channel=source_channel
+    if not cfg.get("enabled") or not channel:return await interaction.response.send_message("Confessions are disabled or no confession channel is saved. Enable them on the dashboard, then verify Railway has a persistent volume mounted at /data.",ephemeral=True)
     await interaction.response.defer(ephemeral=True,thinking=True)
     cid=await publish_confession(interaction.guild,content)
     await interaction.followup.send(f"Confession #{cid} was posted anonymously.",ephemeral=True)
@@ -380,7 +390,7 @@ async def on_interaction(interaction):
     if interaction.response.is_done():return
     try:
         legacy_id=custom_id.lower()
-        if "confession" in legacy_id and "submit" in legacy_id:return await interaction.response.send_modal(ConfessionSubmitModal())
+        if "confession" in legacy_id and "submit" in legacy_id:return await interaction.response.send_modal(ConfessionSubmitModal(interaction.channel_id))
         if "confession" in legacy_id and "reply" in legacy_id:
             match=re.search(r"(\d+)(?!.*\d)",legacy_id)
             return await interaction.response.send_modal(ConfessionReplyModal(int(match.group(1)) if match else 0))
@@ -410,14 +420,14 @@ async def on_interaction(interaction):
         # their key contains the confession ID, so they remain usable even if
         # an old generic component configuration was lost.
         if prefix=="action" and len(parts)>=3 and re.fullmatch(r"confession-\d+",parts[1]):
-            if int(parts[2])==0:return await interaction.response.send_modal(ConfessionSubmitModal())
+            if int(parts[2])==0:return await interaction.response.send_modal(ConfessionSubmitModal(interaction.channel_id))
             if int(parts[2])==1:return await interaction.response.send_modal(ConfessionReplyModal(int(parts[1].split("-",1)[1])))
         if prefix in ("action","actionmenu") and len(parts)>=3:
             key,index=parts[1],int(parts[2]); cfg=storage.get_setting(guild_id,f"message_components:{key}",{})
             choices=(cfg.get("menus") or [])[index].get("options",[]) if prefix=="actionmenu" and index<len(cfg.get("menus") or []) else (cfg.get("buttons") or [])
             choice=choices[int((data.get("values") or [index])[0])] if choices else None
             if choice:
-                if choice.get("action")=="confession_submit":return await interaction.response.send_modal(ConfessionSubmitModal())
+                if choice.get("action")=="confession_submit":return await interaction.response.send_modal(ConfessionSubmitModal(interaction.channel_id))
                 if choice.get("action")=="confession_reply":return await interaction.response.send_modal(ConfessionReplyModal(int(choice.get("confession_id") or 0)))
                 if choice.get("action")=="role":
                     role=interaction.guild.get_role(int(choice.get("role_id") or 0))
@@ -427,7 +437,7 @@ async def on_interaction(interaction):
         if prefix=="glue" and len(parts)>=3 and parts[1]=="template":
             cfg=storage.get_setting(guild_id,f"glue_options:{int(parts[2])}",{}); return await interaction.response.send_message(cfg.get("template") or "No template has been saved.",ephemeral=True)
         if prefix=="confession" and len(parts)>=2:
-            if parts[1]=="submit":return await interaction.response.send_modal(ConfessionSubmitModal())
+            if parts[1]=="submit":return await interaction.response.send_modal(ConfessionSubmitModal(interaction.channel_id))
             if parts[1]=="reply" and len(parts)>=3:return await interaction.response.send_modal(ConfessionReplyModal(int(parts[2])))
         await interaction.response.send_message(f"This button uses an unsupported or deleted configuration (`{clipped(custom_id,80)}`). Republish that specific panel; this is not a bot-permissions error.",ephemeral=True)
     except Exception as e:
