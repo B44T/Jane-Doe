@@ -215,7 +215,8 @@ def load_embed(gid):
     try:msg=bot.submit(work()).result(15)
     except discord.NotFound:return jsonify(error="Message not found in that channel. Paste the full message link to avoid selecting the wrong channel."),404
     except discord.Forbidden:return jsonify(error="The bot cannot read that channel or its message history."),403
-    return jsonify(ok=True,channel_id=str(channel.id),message_id=str(msg.id),content=msg.content,embed=embed_to_dict(msg.embeds[0]) if msg.embeds else {},components=message_components(gid,msg))
+    embeds=[embed_to_dict(e) for e in msg.embeds]
+    return jsonify(ok=True,channel_id=str(channel.id),message_id=str(msg.id),content=msg.content,embed=embeds[0] if embeds else {},embeds=embeds,components=message_components(gid,msg))
 
 @app.delete("/api/guild/<int:gid>/message")
 @protected
@@ -390,7 +391,10 @@ def send_embed(gid):
         if d.get("buttons") or d.get("menus"):
             component_key=secrets.token_hex(6); components={"buttons":d.get("buttons") or [],"menus":d.get("menus") or []}; storage.set_setting(gid,f"message_components:{component_key}",components); view=ActionButtonView(component_key,components)
             if view.is_persistent():bot.add_view(view)
-        msg=await channel.send(content=d.get("content") or None,embed=make_embed(edata) if has_embed_content(edata) else None,files=files,view=view)
+        extra=[make_embed(x) for x in (d.get("embeds") or [])[1:10] if has_embed_content(x)]
+        primary=make_embed(edata) if has_embed_content(edata) else None
+        embeds=([primary] if primary else [])+extra
+        msg=await channel.send(content=d.get("content") or None,embeds=embeds,files=files,view=view)
         if component_key:storage.execute("INSERT OR REPLACE INTO message_component_configs VALUES(?,?,?)",(msg.id,gid,component_key))
         return str(msg.id)
     return jsonify(ok=True,message_id=bot.submit(work()).result(15))
@@ -404,16 +408,16 @@ def edit_embed(gid):
     async def work():
         msg=await channel.fetch_message(mid)
         if msg.author.id!=bot.user.id:raise PermissionError("Discord only allows the bot to edit messages it originally sent.")
-        edata=d.get("embed") or {}; kwargs={"content":d.get("content") or None,"embed":make_embed(edata) if has_embed_content(edata) else None}
+        edata=d.get("embed") or {}; all_data=d.get("embeds") or [edata]; kwargs={"content":d.get("content") or None,"embeds":[make_embed(x) for x in all_data[:10] if has_embed_content(x)]}
         token=d.get("asset_token")
         if token:
-            path=os.path.join(UPLOAD_DIR,os.path.basename(token)); kwargs["attachments"]=[discord.File(path,filename=os.path.basename(path))]; edata={**edata,"image":f"attachment://{os.path.basename(path)}"}; kwargs["embed"]=make_embed(edata)
+            path=os.path.join(UPLOAD_DIR,os.path.basename(token)); kwargs["attachments"]=[discord.File(path,filename=os.path.basename(path))]; edata={**edata,"image":f"attachment://{os.path.basename(path)}"}; all_data[0]=edata; kwargs["embeds"]=[make_embed(x) for x in all_data[:10] if has_embed_content(x)]
         thumb_token=d.get("thumbnail_asset_token")
         if thumb_token:
-            path=os.path.join(UPLOAD_DIR,os.path.basename(thumb_token)); kwargs.setdefault("attachments",[]).append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"thumbnail":f"attachment://{os.path.basename(path)}"}; kwargs["embed"]=make_embed(edata)
+            path=os.path.join(UPLOAD_DIR,os.path.basename(thumb_token)); kwargs.setdefault("attachments",[]).append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"thumbnail":f"attachment://{os.path.basename(path)}"}; all_data[0]=edata; kwargs["embeds"]=[make_embed(x) for x in all_data[:10] if has_embed_content(x)]
         author_token=d.get("author_icon_asset_token")
         if author_token:
-            path=os.path.join(UPLOAD_DIR,os.path.basename(author_token)); kwargs.setdefault("attachments",[]).append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"author_icon":f"attachment://{os.path.basename(path)}"}; kwargs["embed"]=make_embed(edata)
+            path=os.path.join(UPLOAD_DIR,os.path.basename(author_token)); kwargs.setdefault("attachments",[]).append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"author_icon":f"attachment://{os.path.basename(path)}"}; all_data[0]=edata; kwargs["embeds"]=[make_embed(x) for x in all_data[:10] if has_embed_content(x)]
         old=storage.rows("SELECT component_key FROM message_component_configs WHERE message_id=? AND guild_id=?",(mid,gid))
         if d.get("buttons") or d.get("menus"):
             key=secrets.token_hex(6); components={"buttons":d.get("buttons") or [],"menus":d.get("menus") or []}; storage.set_setting(gid,f"message_components:{key}",components); kwargs["view"]=ActionButtonView(key,components)
@@ -453,7 +457,19 @@ def reaction_role(gid):
 def reaction_panel(gid):
     d=request.get_json(force=True); choices=[c for c in d.get("choices",[]) if c.get("label") and c.get("role_id")][:25]
     if not choices:return jsonify(error="Add at least one role choice."),400
-    d["choices"]=choices; key=d.get("key") or secrets.token_hex(5); storage.set_setting(gid,f"reaction_panel:{key}",d); channel=guild(gid).get_channel(int(d["channel_id"]))
+    d["choices"]=choices; channel=guild(gid).get_channel(int(d["channel_id"]))
+    if d.get("mode")=="reactions":
+        usable=[c for c in choices if c.get("emoji")]
+        if len(usable)!=len(choices):return jsonify(error="Reaction roles need an emoji for every role choice."),400
+        async def reaction_work():
+            embed,files=make_embed_with_files(d.get("embed")); msg=await channel.send(content=d.get("content") or None,embed=embed,files=files)
+            for choice in usable:await msg.add_reaction(choice["emoji"])
+            return msg.id
+        try:mid=bot.submit(reaction_work()).result(15)
+        except discord.HTTPException as e:return jsonify(error=f"Discord rejected a reaction or embed: {e.text or str(e)}"),400
+        for choice in usable:storage.execute("INSERT OR REPLACE INTO reaction_roles VALUES(?,?,?,?,?)",(gid,mid,int(d['channel_id']),choice['emoji'],int(choice['role_id'])))
+        return jsonify(ok=True,message_id=str(mid),mode="reactions")
+    key=d.get("key") or secrets.token_hex(5); storage.set_setting(gid,f"reaction_panel:{key}",d)
     async def work():
         view=ReactionRoleView(key,d)
         bot.add_view(view); embed,files=make_embed_with_files(d.get("embed")); msg=await channel.send(content=d.get("content") or None,embed=embed,files=files,view=view); return msg.id

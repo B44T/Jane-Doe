@@ -1,4 +1,4 @@
-import asyncio, io, json, random, re, os, sys
+import asyncio, io, json, random, re, os, sys, secrets
 from datetime import datetime, timezone, timedelta
 import discord, requests
 from discord import app_commands
@@ -561,11 +561,39 @@ async def stealemoji(interaction:discord.Interaction,emoji:str,name:str|None=Non
     ext="gif" if match.group(1) else "png"; data=requests.get(f"https://cdn.discordapp.com/emojis/{match.group(3)}.{ext}",timeout=10).content
     created=await interaction.guild.create_custom_emoji(name=name or match.group(2),image=data,reason=f"Stolen by {interaction.user}"); await interaction.response.send_message(f"Added {created}")
 
-@bot.tree.command(description="Create a quick reaction poll")
-async def poll(interaction:discord.Interaction,question:str,option_1:str,option_2:str,option_3:str|None=None,option_4:str|None=None):
-    opts=[x for x in [option_1,option_2,option_3,option_4] if x]; nums=["1️⃣","2️⃣","3️⃣","4️⃣"]
-    await interaction.response.send_message(embed=make_embed({"title":question,"description":"\n".join(f"{nums[i]} {x}" for i,x in enumerate(opts)),"footer":f"Poll by {interaction.user.display_name}"})); msg=await interaction.original_response()
-    for x in nums[:len(opts)]: await msg.add_reaction(x)
+@bot.tree.command(description="Post a customizable announcement")
+@app_commands.check(staff)
+@app_commands.describe(channel="Where to post (defaults to this channel)",content="Normal text above the embed",title="Embed title",description="Embed body",color="Hex color, such as #5865F2",footer="Small text at the bottom",image_url="Large image URL",thumbnail_url="Small image URL",image="Upload a large image instead of using a URL")
+async def announce(interaction:discord.Interaction,title:str,description:str,channel:discord.TextChannel|None=None,content:str="",color:str="#5865F2",footer:str="",image_url:str="",thumbnail_url:str="",image:discord.Attachment|None=None):
+    target=channel or interaction.channel
+    if not isinstance(target,(discord.TextChannel,discord.Thread)):
+        return await interaction.response.send_message("Choose a text channel for the announcement.",ephemeral=True)
+    permissions=target.permissions_for(interaction.guild.me)
+    if not permissions.view_channel or not permissions.send_messages:
+        return await interaction.response.send_message(f"I cannot send messages in {target.mention}.",ephemeral=True)
+    edata={"title":title,"description":description,"color":color,"footer":footer,"image":image.url if image else image_url,"thumbnail":thumbnail_url,"author":interaction.user.display_name,"author_icon":str(interaction.user.display_avatar.url)}
+    await interaction.response.defer(ephemeral=True)
+    try:msg=await target.send(content=content or None,embed=make_embed(edata))
+    except discord.HTTPException as e:return await interaction.followup.send(f"Discord rejected the announcement: {e.text or str(e)}",ephemeral=True)
+    await interaction.followup.send(f"Announcement posted in {target.mention}: {msg.jump_url}",ephemeral=True)
+
+@bot.tree.command(description="Create a customizable button poll")
+@app_commands.check(staff)
+@app_commands.describe(channel="Where to post (defaults to this channel)",description="Extra text below the question",color="Hex color, such as #5865F2",footer="Small text at the bottom",image_url="Large image URL",thumbnail_url="Small image URL",option_1="First choice",option_2="Second choice",option_3="Optional third choice",option_4="Optional fourth choice",option_5="Optional fifth choice")
+async def poll(interaction:discord.Interaction,question:str,option_1:str,option_2:str,channel:discord.TextChannel|None=None,description:str="Choose an option below.",color:str="#5865F2",footer:str="",image_url:str="",thumbnail_url:str="",option_3:str|None=None,option_4:str|None=None,option_5:str|None=None):
+    target=channel or interaction.channel; options=[x.strip() for x in (option_1,option_2,option_3,option_4,option_5) if x and x.strip()]
+    if not isinstance(target,(discord.TextChannel,discord.Thread)):
+        return await interaction.response.send_message("Choose a text channel for the poll.",ephemeral=True)
+    permissions=target.permissions_for(interaction.guild.me)
+    if not permissions.view_channel or not permissions.send_messages:
+        return await interaction.response.send_message(f"I cannot send messages in {target.mention}.",ephemeral=True)
+    key=secrets.token_hex(6); cfg={"options":options,"question":question}; storage.set_setting(interaction.guild_id,f"poll:{key}",cfg)
+    view=PollView(key,options); bot.add_view(view); embed=make_embed({"title":question,"description":description,"color":color,"footer":footer or f"Poll by {interaction.user.display_name}","image":image_url,"thumbnail":thumbnail_url})
+    await interaction.response.defer(ephemeral=True)
+    try:msg=await target.send(embed=embed,view=view)
+    except discord.HTTPException as e:
+        storage.execute("DELETE FROM settings WHERE guild_id=? AND key=?",(interaction.guild_id,f"poll:{key}")); return await interaction.followup.send(f"Discord rejected the poll: {e.text or str(e)}",ephemeral=True)
+    await interaction.followup.send(f"Poll posted in {target.mention}: {msg.jump_url}",ephemeral=True)
 
 @tasks.loop(minutes=1)
 async def birthday_check():
