@@ -109,7 +109,7 @@ def bot_avatar(gid):
     except requests.RequestException:return Response(status=502)
     return Response(upstream.content,mimetype=upstream.headers.get("Content-Type","image/png"),headers={"Cache-Control":"private, max-age=300"})
 
-def emoji_json(e):return {"id":str(e.id),"name":e.name,"url":str(e.url),"proxy_url":f"/api/emoji/{e.id}?animated={1 if e.animated else 0}","animated":e.animated,"text":str(e)}
+def emoji_json(e):return {"id":str(e.id),"name":e.name,"url":str(e.url),"proxy_url":str(e.url),"animated":e.animated,"text":str(e)}
 
 def saved_components(gid,message_id):
     row=storage.rows("SELECT component_key FROM message_component_configs WHERE message_id=? AND guild_id=?",(message_id,gid))
@@ -593,4 +593,4 @@ def create_event(gid):
 
 def run_dashboard():
     from waitress import serve
-    serve(app,host=config.HOST,port=config.PORT,threads=2,channel_timeout=90)
+    serve(app,host=config.HOST,port=config.PORT,threads=8,channel_timeout=90)
