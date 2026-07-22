@@ -46,6 +46,14 @@ def clipped(value,limit=1024):
     value=str(value or "")
     return value if len(value)<=limit else value[:limit-1]+"…"
 
+def announcement_embed(cfg,member=None):
+    edata=cfg.get("embed") or {}
+    if member:edata={k:variables(v,member) if isinstance(v,str) else v for k,v in edata.items()}
+    else:edata=dict(edata)
+    if cfg.get("anonymous"):
+        edata.pop("author",None); edata.pop("author_icon",None); edata.pop("author_icon_asset",None)
+    return edata
+
 async def action_log(guild,event,member,title,description="",fields=None,color=0xB8343F):
     cfg=storage.get_setting(guild.id,"action_logs",{})
     if not cfg.get("enabled") or not cfg.get(event):return
@@ -265,25 +273,23 @@ async def post_confession_reply(interaction,confession_id,content):
 @bot.event
 async def on_ready():
     await bot.change_presence(status=discord.Status.online,activity=discord.Game(name="Managing the server"))
-    if not getattr(bot,"commands_synced",False):
-        disabled=set(storage.get_setting(0,"disabled_commands",[]))
-        # These commands are core publishing tools requested for both Discord
-        # and the dashboard. Clear stale dashboard-deletion flags from older
-        # deployments so Discord cannot retain an unregistered cached command.
-        disabled.difference_update({"announce","poll","event"})
-        storage.set_setting(0,"disabled_commands",sorted(disabled))
-        for command_name in disabled:bot.tree.remove_command(command_name)
-        # Guild commands update immediately. Global command changes can remain
-        # cached for an hour and Discord reports those stale definitions as
-        # "outdated". Use the configured single-server scope when available.
-        if config.GUILD_ID:
-            target=discord.Object(id=config.GUILD_ID)
-            bot.tree.copy_global_to(guild=target)
-            synced=await bot.tree.sync(guild=target)
-        else:
-            synced=await bot.tree.sync()
-        bot.commands_synced=True
-        print(f"Synced {len(synced)} {'server' if config.GUILD_ID else 'global'} command(s)")
+    disabled=set(storage.get_setting(0,"disabled_commands",[]))
+    # These commands are core publishing tools requested for both Discord and
+    # the dashboard. Re-sync on every ready event so option changes are applied
+    # after startup as well as after a Discord gateway outage/reconnect.
+    disabled.difference_update({"announce","poll","event"})
+    storage.set_setting(0,"disabled_commands",sorted(disabled))
+    for command_name in disabled:bot.tree.remove_command(command_name)
+    # Guild commands update immediately. Global command changes can remain
+    # cached for an hour and Discord reports those stale definitions as
+    # "outdated". Use the configured single-server scope when available.
+    if config.GUILD_ID:
+        target=discord.Object(id=config.GUILD_ID)
+        bot.tree.copy_global_to(guild=target)
+        synced=await bot.tree.sync(guild=target)
+    else:
+        synced=await bot.tree.sync()
+    print(f"Synced {len(synced)} {'server' if config.GUILD_ID else 'global'} command(s)")
     bot.add_view(TicketControls()); restored=1; failed=0
     def restore(view,label):
         nonlocal restored,failed
@@ -376,7 +382,7 @@ async def on_member_join(member):
     cfg=storage.get_setting(member.guild.id,"welcome",{})
     channel=member.guild.get_channel(int(cfg.get("channel_id") or 0))
     if cfg.get("enabled") and channel:
-        edata={k:variables(v,member) if isinstance(v,str) else v for k,v in cfg.get("embed",{}).items()}
+        edata=announcement_embed(cfg,member)
         content=variables(cfg.get("content", ""),member)
         if cfg.get("invite_tracking"):
             inviter="Unknown inviter"; code="unknown"; uses="0"
@@ -401,7 +407,7 @@ async def on_member_join(member):
 async def on_member_remove(member):
     cfg=storage.get_setting(member.guild.id,"leave",{}); channel=member.guild.get_channel(int(cfg.get("channel_id") or 0))
     if cfg.get("enabled") and channel:
-        edata={k:variables(v,member) if isinstance(v,str) else v for k,v in cfg.get("embed",{}).items()}
+        edata=announcement_embed(cfg,member)
         embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content", ""),member) or None,embed=embed,files=files)
     roles=[r.mention for r in member.roles if not r.is_default()]
     await action_log(member.guild,"member_leave",member,"Member left",f"{member.mention} left **{member.guild.name}**.",[("Roles",clipped(" ".join(roles) if roles else "No roles",1024),False)],0xED4245)
@@ -411,7 +417,7 @@ async def on_member_update(before,after):
     if before.premium_since==after.premium_since:return
     cfg=storage.get_setting(after.guild.id,"boost",{}); channel=after.guild.get_channel(int(cfg.get("channel_id") or 0))
     if cfg.get("enabled") and channel and after.premium_since:
-        edata=cfg.get("embed") or {}; embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content", ""),after) or None,embed=embed,files=files)
+        edata=announcement_embed(cfg,after); embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content", ""),after) or None,embed=embed,files=files)
 
 @bot.event
 async def on_voice_state_update(member,before,after):
@@ -579,15 +585,16 @@ async def stealemoji(interaction:discord.Interaction,emoji:str,name:str|None=Non
 @bot.tree.command(description="Post a customizable announcement")
 @app_commands.check(publisher)
 @app_commands.default_permissions(manage_messages=True)
-@app_commands.describe(channel="Where to post (defaults to this channel)",content="Normal text above the embed",title="Embed title",description="Embed body",color="Hex color, such as #5865F2",footer="Small text at the bottom",image_url="Large image URL",thumbnail_url="Small image URL",image="Upload a large image instead of using a URL")
-async def announce(interaction:discord.Interaction,title:str,description:str,channel:discord.TextChannel|None=None,content:str="",color:str="#5865F2",footer:str="",image_url:str="",thumbnail_url:str="",image:discord.Attachment|None=None):
+@app_commands.describe(channel="Where to post (defaults to this channel)",content="Normal text above the embed",title="Embed title",description="Embed body",color="Hex color, such as #5865F2",footer="Small text at the bottom",image_url="Large image URL",thumbnail_url="Small image URL",image="Upload a large image instead of using a URL",anonymous="Hide your name and profile picture from the announcement")
+async def announce(interaction:discord.Interaction,title:str,description:str,channel:discord.TextChannel|None=None,content:str="",color:str="#5865F2",footer:str="",image_url:str="",thumbnail_url:str="",image:discord.Attachment|None=None,anonymous:bool=False):
     target=channel or interaction.channel
     if not isinstance(target,(discord.TextChannel,discord.Thread)):
         return await interaction.response.send_message("Choose a text channel for the announcement.",ephemeral=True)
     permissions=target.permissions_for(interaction.guild.me)
     if not permissions.view_channel or not permissions.send_messages:
         return await interaction.response.send_message(f"I cannot send messages in {target.mention}.",ephemeral=True)
-    edata={"title":title,"description":description,"color":color,"footer":footer,"image":image.url if image else image_url,"thumbnail":thumbnail_url,"author":interaction.user.display_name,"author_icon":str(interaction.user.display_avatar.url)}
+    edata={"title":title,"description":description,"color":color,"footer":footer,"image":image.url if image else image_url,"thumbnail":thumbnail_url}
+    if not anonymous:edata.update(author=interaction.user.display_name,author_icon=str(interaction.user.display_avatar.url))
     await interaction.response.defer(ephemeral=True)
     try:msg=await target.send(content=content or None,embed=make_embed(edata))
     except discord.HTTPException as e:return await interaction.followup.send(f"Discord rejected the announcement: {e.text or str(e)}",ephemeral=True)
@@ -625,7 +632,7 @@ async def birthday_check():
         for row in storage.rows("SELECT * FROM birthdays WHERE guild_id=? AND month=? AND day=?",(guild.id,now.month,now.day)):
             member=await resolve_member(guild,row['user_id'])
             if member and channel:
-                edata=cfg.get("embed") or {}; embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content","Happy birthday {user}! 🎉"),member) or None,embed=embed,files=files)
+                edata=announcement_embed(cfg,member); embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content","Happy birthday {user}! 🎉"),member) or None,embed=embed,files=files)
         storage.set_setting(guild.id,"birthday_last_run",today)
 
 @tasks.loop(seconds=30)

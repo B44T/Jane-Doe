@@ -439,12 +439,28 @@ def edit_embed(gid):
 @app.post("/api/guild/<int:gid>/ticket-panel")
 @protected
 def ticket_panel(gid):
-    d=request.get_json(force=True); key=d.get("key") or secrets.token_hex(4); storage.set_setting(gid,f"ticket_panel:{key}",d); channel=guild(gid).get_channel(int(d["channel_id"]))
+    d=request.get_json(force=True); key=d.get("key") or secrets.token_hex(4); g=guild(gid)
+    try:channel=g.get_channel(int(d.get("channel_id") or 0)) if g else None
+    except (TypeError,ValueError):channel=None
+    if not isinstance(channel,(discord.TextChannel,discord.Thread)):return jsonify(error="Choose a text channel for the ticket panel."),400
+    permissions=channel.permissions_for(g.me)
+    missing=[]
+    if not permissions.view_channel:missing.append("View Channel")
+    if isinstance(channel,discord.Thread):
+        if not permissions.send_messages_in_threads:missing.append("Send Messages in Threads")
+    elif not permissions.send_messages:missing.append("Send Messages")
+    if has_embed_content(d.get("embed")) and not permissions.embed_links:missing.append("Embed Links")
+    panel_embed=d.get("embed") or {}
+    if (panel_embed.get("image_asset") or panel_embed.get("thumbnail_asset") or panel_embed.get("author_icon_asset")) and not permissions.attach_files:missing.append("Attach Files")
+    if missing:return jsonify(error=f"Jane Doe needs {', '.join(missing)} in #{channel.name} to publish this ticket panel."),403
     async def work():
         view=TicketPanel(key,d)
-        bot.add_view(view)
-        embed,files=make_embed_with_files(d.get("embed")); msg=await channel.send(content=d.get("content") or None,embed=embed,files=files,view=view); return str(msg.id)
-    try:return jsonify(ok=True,key=key,message_id=bot.submit(work()).result(15))
+        embed,files=make_embed_with_files(d.get("embed")); msg=await channel.send(content=d.get("content") or None,embed=embed,files=files,view=view)
+        bot.add_view(view); return str(msg.id)
+    try:
+        message_id=bot.submit(work()).result(15); storage.set_setting(gid,f"ticket_panel:{key}",d)
+        return jsonify(ok=True,key=key,message_id=message_id)
+    except discord.Forbidden:return jsonify(error="Discord denied the ticket panel post. Check Jane Doe's channel overrides for View Channel, Send Messages, Embed Links, and Attach Files."),403
     except discord.HTTPException as e:return jsonify(error=f"Discord rejected the ticket panel: {e.text or str(e)}"),400
 
 @app.post("/api/guild/<int:gid>/reaction-role")
