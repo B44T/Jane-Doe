@@ -86,9 +86,17 @@ def context(gid):
     # Reading it avoids a Discord REST request every time the dashboard refreshes.
     emojis=list(g.emojis)
     static=sum(not e.animated for e in emojis); animated=sum(e.animated for e in emojis); limit=g.emoji_limit
-    local_avatar=os.path.join(UPLOAD_DIR,f"bot-profile-{g.id}.png"); fallback=str(g.me.display_avatar.url)
-    avatar=f"/api/guild/{g.id}/bot-avatar?v={os.stat(local_avatar).st_mtime_ns if os.path.isfile(local_avatar) else getattr(g.me.display_avatar,'key',g.me.id)}"
-    return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":avatar,"avatar_fallback":fallback},ui_version=ASSET_VERSION,emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
+    # guild.me can legitimately be absent when Discord member caching is
+    # restricted.  Falling back to ClientUser keeps the whole dashboard from
+    # failing merely because the server-specific member is not cached yet.
+    member=g.me or bot.user
+    profile_name=getattr(member,"display_name",None) or getattr(member,"global_name",None) or getattr(member,"name","Jane Doe")
+    display_avatar=getattr(member,"display_avatar",None)
+    fallback=str(display_avatar.url) if display_avatar else ""
+    local_avatar=os.path.join(UPLOAD_DIR,f"bot-profile-{g.id}.png")
+    avatar_version=os.stat(local_avatar).st_mtime_ns if os.path.isfile(local_avatar) else getattr(display_avatar,"key",getattr(member,"id",g.id))
+    avatar=f"/api/guild/{g.id}/bot-avatar?v={avatar_version}" if display_avatar or os.path.isfile(local_avatar) else ""
+    return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":profile_name,"avatar":avatar,"avatar_fallback":fallback},ui_version=ASSET_VERSION,emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
 
 @app.get("/api/guild/<int:gid>/bot-avatar")
 @protected
@@ -97,8 +105,10 @@ def bot_avatar(gid):
     if not g:return Response(status=404)
     local_path=os.path.join(UPLOAD_DIR,f"bot-profile-{gid}.png")
     if os.path.isfile(local_path):return send_from_directory(UPLOAD_DIR,os.path.basename(local_path),conditional=True,max_age=300)
+    member=g.me or bot.user; display_avatar=getattr(member,"display_avatar",None)
+    if not display_avatar:return Response(status=404)
     try:
-        upstream=requests.get(str(g.me.display_avatar.with_size(256)),headers={"User-Agent":"Jane-Doe-by-B4T/1.0"},timeout=8)
+        upstream=requests.get(str(display_avatar.with_size(256)),headers={"User-Agent":"Jane-Doe-by-B4T/1.0"},timeout=8)
         upstream.raise_for_status()
     except requests.RequestException:return Response(status=502)
     return Response(upstream.content,mimetype=upstream.headers.get("Content-Type","image/png"),headers={"Cache-Control":"private, max-age=300"})
