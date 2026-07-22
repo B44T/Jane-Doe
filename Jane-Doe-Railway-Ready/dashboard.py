@@ -497,7 +497,7 @@ def create_event(gid):
         if buttons and channel:
             for b in buttons:
                 if b.get("action")=="link" and not b.get("url"):b["url"]=str(event.url)
-            key=secrets.token_hex(6); storage.set_setting(gid,f"message_components:{key}",{"buttons":buttons}); view=ActionButtonView(key,buttons); await channel.send(embed=make_embed({"title":event.name,"description":d.get("description") or f"Starts <t:{int(start.timestamp())}:R>","color":"#5865F2"}),view=view)
+            key=secrets.token_hex(6); storage.set_setting(gid,f"message_components:{key}",{"buttons":buttons}); view=ActionButtonView(key,buttons); edata={**(d.get("embed") or {}),"title":event.name,"description":d.get("description") or f"Starts <t:{int(start.timestamp())}:R>","color":"#5865F2"}; embed,files=make_embed_with_files(edata); await channel.send(embed=embed,files=files,view=view)
         return event.id
     return jsonify(ok=True,event_id=str(bot.submit(work()).result(15)))
 

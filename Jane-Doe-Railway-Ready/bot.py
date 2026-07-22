@@ -249,10 +249,10 @@ async def post_confession_reply(interaction,confession_id,content):
     except discord.Forbidden:return await interaction.followup.send("I need Create Public Threads and Send Messages in Threads to post replies.",ephemeral=True)
     except (discord.NotFound,discord.HTTPException,RuntimeError) as e:return await interaction.followup.send(f"The reply thread could not be opened: {e}",ephemeral=True)
     reply_id=storage.execute("INSERT INTO confession_replies(confession_id,guild_id,user_id,content) VALUES(?,?,?,?)",(confession_id,interaction.guild_id,0,content))
-    title=(cfg.get("reply_title") or "Anonymous reply #{reply_id}").replace("{reply_id}",str(reply_id)).replace("{id}",str(confession_id)); footer=(cfg.get("reply_footer") or "Reply to confession #{id}").replace("{id}",str(confession_id)).replace("{reply_id}",str(reply_id)); edata={"title":title,"description":content,"color":cfg.get("reply_color") or (cfg.get("embed") or {}).get("color") or "#2b2d31","footer":footer}
+    title=(cfg.get("reply_title") or "Anonymous reply #{reply_id}").replace("{reply_id}",str(reply_id)).replace("{id}",str(confession_id)); footer=(cfg.get("reply_footer") or "Reply to confession #{id}").replace("{id}",str(confession_id)).replace("{reply_id}",str(reply_id)); edata={"title":title,"description":content,"color":cfg.get("reply_color") or (cfg.get("embed") or {}).get("color") or "#2b2d31","footer":footer,"author":cfg.get("reply_author") or "","author_icon":cfg.get("reply_author_icon") or "","author_icon_asset":cfg.get("reply_author_icon_asset") or ""}
     try:
         if thread.archived:await thread.edit(archived=False,reason="New anonymous confession reply")
-        msg=await thread.send(embed=make_embed(edata)); storage.execute("UPDATE confession_replies SET message_id=? WHERE id=?",(msg.id,reply_id))
+        embed,files=make_embed_with_files(edata); msg=await thread.send(embed=embed,files=files); storage.execute("UPDATE confession_replies SET message_id=? WHERE id=?",(msg.id,reply_id))
     except discord.Forbidden:return await interaction.followup.send("I cannot send messages in that confession thread.",ephemeral=True)
     await interaction.followup.send(f"Anonymous reply #{reply_id} was posted in the confession thread.",ephemeral=True)
 
