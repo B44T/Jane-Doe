@@ -16,6 +16,7 @@ UPLOAD_DIR=config.UPLOAD_DIR; os.makedirs(UPLOAD_DIR,exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"]=10*1024*1024
 ASSET_FILES=("app.js","enhancements.js","crop-editor.js","app.css","goth.css")
 ASSET_VERSION=hashlib.sha256(b"".join(open(os.path.join(app.static_folder,name),"rb").read() for name in ASSET_FILES)).hexdigest()[:12]
+RELEASE="crop-avatar-v3"
 
 @app.url_defaults
 def version_static_assets(endpoint,values):
@@ -40,7 +41,7 @@ def health():
     # serve a useful login/status response while Discord is still connecting,
     # so a delayed gateway connection must not keep the public deployment from
     # becoming routable forever.
-    return jsonify(status="ok",discord_ready=ready,ui_version=ASSET_VERSION,crop_editor="standalone-drag-v2"),200
+    return jsonify(status="ok",discord_ready=ready,ui_version=ASSET_VERSION,crop_editor="standalone-drag-v3",release=RELEASE),200
 
 def protected(fn):
     @wraps(fn)
@@ -68,8 +69,13 @@ async def register_view(view):bot.add_view(view); return True
 @protected
 def home():
     html=render_template("dashboard.html",guilds=guilds(),application_id=config.APPLICATION_ID)
-    enhancements_url=url_for("static",filename="enhancements.js"); crop_url=url_for("static",filename="crop-editor.js")
+    enhancements_url=url_for("static",filename="enhancements.js"); crop_url=url_for("crop_editor_asset",release=RELEASE)
     return html.replace("</body>",f'<script src="{enhancements_url}" defer></script><script src="{crop_url}" defer></script></body>')
+
+@app.get("/assets/<release>/crop-editor.js")
+def crop_editor_asset(release):
+    if release!=RELEASE:return Response(status=404)
+    return send_from_directory(app.static_folder,"crop-editor.js",conditional=False,max_age=0)
 
 @app.get("/api/guild/<int:gid>/context")
 @protected
