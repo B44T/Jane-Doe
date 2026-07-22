@@ -26,7 +26,7 @@ The message editor loads, previews and edits persistent buttons and dropdowns, i
 6. In the service Networking settings, generate a Railway domain. Railway supplies `PORT` automatically; do not create a `PORT` variable yourself.
 7. Open the generated HTTPS domain and sign in with `DASHBOARD_SECRET`.
 
-The Discord bot and dashboard run in one Railway service. Waitress serves the dashboard with two worker threads, `/health` reports Discord readiness, and Railway restarts the complete service if the bot connection exits. The volume preserves SQLite records and uploaded images/GIFs across deployments. Because this build targets one server, it retains that server's member records so leave logs can accurately show the departed member's roles and profile.
+The Discord bot and dashboard run in one Railway service. Waitress serves the dashboard with eight worker threads, and `/health` keeps Railway's web health check available while separately reporting Discord readiness. The volume preserves SQLite records and uploaded images/GIFs across deployments. Because this build targets one server, it retains that server's member records so leave logs can accurately show the departed member's roles and profile.
 
 Persistent buttons and dropdowns depend on their saved callback configuration in `bot.db`. Railway keeps it on the `/data` volume. Local Windows runs now keep it in `%USERPROFILE%\\.jane-doe-by-b4t` and automatically recover the most complete database from older Jane Doe download folders when first upgrading, so replacing the program folder does not disconnect previously posted components.
 

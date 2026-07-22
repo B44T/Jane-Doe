@@ -1,9 +1,0 @@
-.git
-.github
-.env
-__pycache__
-*.py[cod]
-*.db
-.venv
-venv
-uploads

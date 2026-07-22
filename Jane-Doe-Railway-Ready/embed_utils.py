@@ -33,10 +33,7 @@ def make_embed_with_files(data):
             files.append(discord.File(path,filename=token)); data[field]=f"attachment://{token}"
     return (make_embed(data) if has_embed_content(data) else None),files
 
-def variables(text, member, extra=None):
+def variables(text, member):
     if not text: return text
     guild=member.guild
-    result=text.replace("{user}",member.mention).replace("{username}",member.name).replace("{display_name}",member.display_name).replace("{server}",guild.name).replace("{member_count}",str(guild.member_count or 0))
-    for key,value in (extra or {}).items():result=result.replace("{"+key+"}",str(value))
-    return result
-
+    return text.replace("{user}",member.mention).replace("{username}",member.name).replace("{display_name}",member.display_name).replace("{server}",guild.name).replace("{member_count}",str(guild.member_count or 0))
