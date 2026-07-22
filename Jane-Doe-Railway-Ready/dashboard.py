@@ -1,4 +1,4 @@
-import asyncio, base64, io, json, secrets, os, re, uuid
+import asyncio, base64, hashlib, io, json, secrets, os, re, uuid
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import Flask, Response, jsonify, redirect, render_template, request, send_from_directory, session, url_for
@@ -14,7 +14,8 @@ app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SES
 app.config["SEND_FILE_MAX_AGE_DEFAULT"]=0
 UPLOAD_DIR=config.UPLOAD_DIR; os.makedirs(UPLOAD_DIR,exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"]=10*1024*1024
-ASSET_VERSION=str(max(os.path.getmtime(os.path.join(app.static_folder,name)) for name in ("app.js","enhancements.js","crop-editor.js","app.css","goth.css")))
+ASSET_FILES=("app.js","enhancements.js","crop-editor.js","app.css","goth.css")
+ASSET_VERSION=hashlib.sha256(b"".join(open(os.path.join(app.static_folder,name),"rb").read() for name in ASSET_FILES)).hexdigest()[:12]
 
 @app.url_defaults
 def version_static_assets(endpoint,values):
@@ -22,7 +23,7 @@ def version_static_assets(endpoint,values):
 
 @app.after_request
 def prevent_stale_dashboard_assets(response):
-    if request.path.startswith("/static/"):
+    if request.path.startswith("/static/") or response.mimetype=="text/html":
         response.headers["Cache-Control"]="no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"]="no-cache"
         response.headers["Expires"]="0"
@@ -75,9 +76,9 @@ def context(gid):
     # Reading it avoids a Discord REST request every time the dashboard refreshes.
     emojis=list(g.emojis)
     static=sum(not e.animated for e in emojis); animated=sum(e.animated for e in emojis); limit=g.emoji_limit
-    local_avatar=os.path.join(UPLOAD_DIR,f"bot-profile-{g.id}.png")
-    avatar_version=os.stat(local_avatar).st_mtime_ns if os.path.isfile(local_avatar) else (getattr(g.me.display_avatar,"key",None) or g.me.id)
-    return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":f"/api/guild/{g.id}/bot-avatar?v={avatar_version}","avatar_fallback":str(g.me.display_avatar.url)},ui_version=ASSET_VERSION,emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
+    local_avatar=os.path.join(UPLOAD_DIR,f"bot-profile-{g.id}.png"); fallback=str(g.me.display_avatar.url)
+    avatar=f"/api/guild/{g.id}/bot-avatar?v={os.stat(local_avatar).st_mtime_ns}" if os.path.isfile(local_avatar) else fallback
+    return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":avatar,"avatar_fallback":fallback},ui_version=ASSET_VERSION,emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
 
 @app.get("/api/guild/<int:gid>/bot-avatar")
 @protected
