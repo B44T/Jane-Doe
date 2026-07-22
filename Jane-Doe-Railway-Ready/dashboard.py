@@ -14,7 +14,7 @@ app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SES
 app.config["SEND_FILE_MAX_AGE_DEFAULT"]=0
 UPLOAD_DIR=config.UPLOAD_DIR; os.makedirs(UPLOAD_DIR,exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"]=10*1024*1024
-ASSET_VERSION=str(max(os.path.getmtime(os.path.join(app.static_folder,name)) for name in ("app.js","crop-editor.js","app.css","goth.css")))
+ASSET_VERSION=str(max(os.path.getmtime(os.path.join(app.static_folder,name)) for name in ("app.js","enhancements.js","crop-editor.js","app.css","goth.css")))
 
 @app.url_defaults
 def version_static_assets(endpoint,values):
@@ -59,8 +59,8 @@ async def register_view(view):bot.add_view(view); return True
 @protected
 def home():
     html=render_template("dashboard.html",guilds=guilds(),application_id=config.APPLICATION_ID)
-    crop_url=url_for("static",filename="crop-editor.js")
-    return html.replace("</body>",f'<script src="{crop_url}" defer></script></body>')
+    enhancements_url=url_for("static",filename="enhancements.js"); crop_url=url_for("static",filename="crop-editor.js")
+    return html.replace("</body>",f'<script src="{enhancements_url}" defer></script><script src="{crop_url}" defer></script></body>')
 
 @app.get("/api/guild/<int:gid>/context")
 @protected
@@ -444,6 +444,9 @@ def edit_embed(gid):
         thumb_token=d.get("thumbnail_asset_token")
         if thumb_token:
             path=os.path.join(UPLOAD_DIR,os.path.basename(thumb_token)); kwargs.setdefault("attachments",[]).append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"thumbnail":f"attachment://{os.path.basename(path)}"}; kwargs["embed"]=make_embed(edata)
+        author_token=d.get("author_asset_token")
+        if author_token:
+            path=os.path.join(UPLOAD_DIR,os.path.basename(author_token)); kwargs.setdefault("attachments",[]).append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"author_icon":f"attachment://{os.path.basename(path)}"}; kwargs["embed"]=make_embed(edata)
         old=storage.rows("SELECT component_key FROM message_component_configs WHERE message_id=? AND guild_id=?",(mid,gid))
         if d.get("buttons") or d.get("menus"):
             key=secrets.token_hex(6); components={"buttons":d.get("buttons") or [],"menus":d.get("menus") or []}; storage.set_setting(gid,f"message_components:{key}",components); kwargs["view"]=ActionButtonView(key,components)
