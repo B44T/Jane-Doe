@@ -14,6 +14,11 @@ app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SES
 app.config["SEND_FILE_MAX_AGE_DEFAULT"]=0
 UPLOAD_DIR=config.UPLOAD_DIR; os.makedirs(UPLOAD_DIR,exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"]=10*1024*1024
+ASSET_VERSION=str(max(os.path.getmtime(os.path.join(app.static_folder,name)) for name in ("app.js","app.css","goth.css")))
+
+@app.url_defaults
+def version_static_assets(endpoint,values):
+    if endpoint=="static" and "v" not in values:values["v"]=ASSET_VERSION
 
 @app.after_request
 def prevent_stale_dashboard_assets(response):
@@ -65,7 +70,7 @@ def context(gid):
     static=sum(not e.animated for e in emojis); animated=sum(e.animated for e in emojis); limit=g.emoji_limit
     local_avatar=os.path.join(UPLOAD_DIR,f"bot-profile-{g.id}.png")
     avatar_version=os.stat(local_avatar).st_mtime_ns if os.path.isfile(local_avatar) else (getattr(g.me.display_avatar,"key",None) or g.me.id)
-    return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":f"/api/guild/{g.id}/bot-avatar?v={avatar_version}"},emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
+    return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":f"/api/guild/{g.id}/bot-avatar?v={avatar_version}","avatar_fallback":str(g.me.display_avatar.url)},ui_version=ASSET_VERSION,emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
 
 @app.get("/api/guild/<int:gid>/bot-avatar")
 @protected
@@ -205,7 +210,7 @@ def bot_profile(gid):
     if avatar is not None:
         with open(os.path.join(UPLOAD_DIR,f"bot-profile-{gid}.png"),"wb") as saved:saved.write(avatar)
     current=member or g.me; avatar_version=getattr(current.display_avatar,"key",None) or uuid.uuid4().hex
-    return jsonify(ok=True,name=current.display_name,avatar=f"/api/guild/{g.id}/bot-avatar?v={avatar_version}&refresh={uuid.uuid4().hex}")
+    return jsonify(ok=True,name=current.display_name,avatar=f"/api/guild/{g.id}/bot-avatar?v={avatar_version}&refresh={uuid.uuid4().hex}",avatar_fallback=str(current.display_avatar.url))
 
 @app.get("/api/guild/<int:gid>/bot-embeds")
 @protected
