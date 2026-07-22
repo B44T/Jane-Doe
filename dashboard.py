@@ -54,7 +54,23 @@ def context(gid):
     # Reading it avoids a Discord REST request every time the dashboard refreshes.
     emojis=list(g.emojis)
     static=sum(not e.animated for e in emojis); animated=sum(e.animated for e in emojis); limit=g.emoji_limit
-    return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":str(g.me.display_avatar.url)},emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
+    avatar_version=getattr(g.me.display_avatar,"key",None) or g.me.id
+    return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":f"/api/guild/{g.id}/bot-avatar?v={avatar_version}"},emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
+
+@app.get("/api/guild/<int:gid>/bot-avatar")
+@protected
+def bot_avatar(gid):
+    g=guild(gid)
+    if not g:return Response(status=404)
+    async def work():
+        try:member=await g.fetch_member(bot.user.id)
+        except (discord.HTTPException,discord.Forbidden):member=g.me
+        asset=member.display_avatar.with_size(256)
+        return await asset.read(),asset.is_animated()
+    try:data,animated=bot.submit(work()).result(15)
+    except (discord.HTTPException,asyncio.TimeoutError):return Response(status=502)
+    mime="image/gif" if animated else "image/png"
+    return Response(data,mimetype=mime,headers={"Cache-Control":"private, max-age=300"})
 
 def emoji_json(e):return {"id":str(e.id),"name":e.name,"url":str(e.url),"proxy_url":f"/api/emoji/{e.id}?animated={1 if e.animated else 0}","animated":e.animated,"text":str(e)}
 
@@ -167,7 +183,8 @@ def bot_profile(gid):
     try:member=bot.submit(work()).result(20)
     except discord.Forbidden:return jsonify(error="The bot cannot update its server profile in this server."),403
     except discord.HTTPException as e:return jsonify(error=e.text or "Discord rejected the profile update."),400
-    return jsonify(ok=True,name=(member or g.me).display_name,avatar=str((member or g.me).display_avatar.url))
+    current=member or g.me; avatar_version=getattr(current.display_avatar,"key",None) or uuid.uuid4().hex
+    return jsonify(ok=True,name=current.display_name,avatar=f"/api/guild/{g.id}/bot-avatar?v={avatar_version}&refresh={uuid.uuid4().hex}")
 
 @app.get("/api/guild/<int:gid>/bot-embeds")
 @protected
