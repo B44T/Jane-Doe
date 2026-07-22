@@ -40,6 +40,8 @@ def init_db():
         # These were used only by the removed leaderboard/activity system.
         db.execute("DROP TABLE IF EXISTS message_activity")
         db.execute("DROP TABLE IF EXISTS xp")
+        integrity=db.execute("PRAGMA quick_check").fetchone()[0]
+        if integrity!="ok":raise RuntimeError(f"SQLite integrity check failed: {integrity}")
 
 def get_setting(guild_id, key, default=None):
     with LOCK, connect() as db:

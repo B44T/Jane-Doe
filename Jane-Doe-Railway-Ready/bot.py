@@ -288,7 +288,18 @@ async def post_confession(interaction,content):
 
 async def post_confession_reply(interaction,confession_id,content):
     rows=storage.rows("SELECT * FROM confessions WHERE id=? AND guild_id=?",(confession_id,interaction.guild_id))
-    if not rows:return await interaction.response.send_message("That confession no longer exists.",ephemeral=True)
+    # Older deployments could retain the Discord message while losing its
+    # database row. Rebuild that row from the component's source message so a
+    # valid published confession never becomes a dead reply button.
+    source=getattr(interaction,"message",None)
+    if not rows and source:
+        rows=storage.rows("SELECT * FROM confessions WHERE message_id=? AND guild_id=?",(source.id,interaction.guild_id))
+        if not rows and confession_id>0:
+            description=source.embeds[0].description if source.embeds else (source.content or "Recovered confession")
+            storage.execute("INSERT OR IGNORE INTO confessions(id,guild_id,user_id,content,channel_id,message_id) VALUES(?,?,?,?,?,?)",(confession_id,interaction.guild_id,0,description,source.channel.id,source.id))
+            rows=storage.rows("SELECT * FROM confessions WHERE id=? AND guild_id=?",(confession_id,interaction.guild_id))
+    if not rows:return await interaction.response.send_message("This reply button is not attached to a valid confession. Publish confessions from the Confessions page; new and previously published confession panels are automatically restored.",ephemeral=True)
+    confession_id=rows[0]["id"]
     await interaction.response.defer(ephemeral=True,thinking=True)
     cfg=storage.get_setting(interaction.guild_id,"confessions",{})
     try:thread=await get_confession_thread(interaction.guild,rows[0],cfg)
@@ -368,6 +379,11 @@ async def on_interaction(interaction):
     await asyncio.sleep(.7)
     if interaction.response.is_done():return
     try:
+        legacy_id=custom_id.lower()
+        if "confession" in legacy_id and "submit" in legacy_id:return await interaction.response.send_modal(ConfessionSubmitModal())
+        if "confession" in legacy_id and "reply" in legacy_id:
+            match=re.search(r"(\d+)(?!.*\d)",legacy_id)
+            return await interaction.response.send_modal(ConfessionReplyModal(int(match.group(1)) if match else 0))
         parts=custom_id.split(":"); prefix=parts[0]; guild_id=interaction.guild_id
         if prefix=="ticket" and len(parts)>=3 and parts[1] in ("open","select"):
             key=parts[2]; cfg=storage.get_setting(guild_id,f"ticket_panel:{key}",{})
@@ -413,12 +429,13 @@ async def on_interaction(interaction):
         if prefix=="confession" and len(parts)>=2:
             if parts[1]=="submit":return await interaction.response.send_modal(ConfessionSubmitModal())
             if parts[1]=="reply" and len(parts)>=3:return await interaction.response.send_modal(ConfessionReplyModal(int(parts[2])))
-        await interaction.response.send_message("This older panel's saved configuration is missing. Open it in All bot embeds and republish it once.",ephemeral=True)
+        await interaction.response.send_message(f"This button uses an unsupported or deleted configuration (`{clipped(custom_id,80)}`). Republish that specific panel; this is not a bot-permissions error.",ephemeral=True)
     except Exception as e:
         print(f"Persistent component fallback failed for {custom_id}: {type(e).__name__}: {e}")
         try:
-            if interaction.response.is_done():await interaction.followup.send("That saved action could not be completed. Check the bot's permissions and saved configuration.",ephemeral=True)
-            else:await interaction.response.send_message("That saved action could not be completed. Check the bot's permissions and saved configuration.",ephemeral=True)
+            text=f"This saved button failed because of **{type(e).__name__}**. Its configuration may reference a deleted channel, role, message, or emoji. Error: {clipped(str(e),500)}"
+            if interaction.response.is_done():await interaction.followup.send(text,ephemeral=True)
+            else:await interaction.response.send_message(text,ephemeral=True)
         except discord.HTTPException:pass
 
 @bot.event

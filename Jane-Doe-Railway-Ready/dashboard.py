@@ -20,7 +20,8 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"]=0
 @app.get("/health")
 def health():
     ready=bot.is_ready()
-    return jsonify(status="ok",discord_ready=ready),200
+    volume=os.getenv("RAILWAY_VOLUME_MOUNT_PATH","").strip()
+    return jsonify(status="ok",discord_ready=ready,persistent_storage=not bool(os.getenv("RAILWAY_ENVIRONMENT")) or bool(volume),data_dir=os.path.dirname(config.DB_PATH)),200
 
 def protected(fn):
     @wraps(fn)
