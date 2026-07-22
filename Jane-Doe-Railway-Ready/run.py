@@ -30,7 +30,7 @@ def main():
     print(f"Starting Jane Doe by B4T on {config.HOST}:{config.PORT}")
     print(f"Dashboard: {dashboard_url()}")
     if os.getenv("RAILWAY_ENVIRONMENT"):
-        print("Railway detected. Waiting for Discord before /health reports ready.")
+        print("Railway detected. Web health is ready; Discord connects independently.")
     threading.Thread(target=bot_thread,daemon=True,name="discord-bot").start()
     run_dashboard()
 

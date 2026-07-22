@@ -31,7 +31,11 @@ def prevent_stale_dashboard_assets(response):
 @app.get("/health")
 def health():
     ready=bot.is_ready()
-    return jsonify(status="ok" if ready else "starting",discord_ready=ready,ui_version=ASSET_VERSION,crop_editor="standalone-drag-v2"),200 if ready else 503
+    # This endpoint is Railway's web-process liveness check.  The dashboard can
+    # serve a useful login/status response while Discord is still connecting,
+    # so a delayed gateway connection must not keep the public deployment from
+    # becoming routable forever.
+    return jsonify(status="ok",discord_ready=ready,ui_version=ASSET_VERSION,crop_editor="standalone-drag-v2"),200
 
 def protected(fn):
     @wraps(fn)
