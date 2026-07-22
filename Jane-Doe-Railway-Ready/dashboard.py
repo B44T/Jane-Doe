@@ -263,7 +263,14 @@ def delete_saved_asset(gid,token):
 @protected
 def settings(gid,key):
     if request.method=="GET":return jsonify(storage.get_setting(gid,key,{}))
-    storage.set_setting(gid,key,request.get_json(force=True)); return jsonify(ok=True)
+    incoming=request.get_json(force=True)
+    # Settings editors can enhance the same card independently (for example,
+    # welcome text and invite tracking). Merge those writes so a later save
+    # cannot erase options owned by the other editor.
+    current=storage.get_setting(gid,key,{})
+    if isinstance(current,dict) and isinstance(incoming,dict):
+        current.update(incoming); incoming=current
+    storage.set_setting(gid,key,incoming); return jsonify(ok=True)
 
 @app.route("/api/guild/<int:gid>/archives",methods=["GET","POST"])
 @protected
