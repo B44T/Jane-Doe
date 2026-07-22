@@ -494,10 +494,10 @@ async def send_gif_action(interaction,target,action):
     cfg=storage.get_setting(interaction.guild_id,"gif_actions",{}); choices=[x for x in cfg.get(action,[]) if x]
     if not choices:return await interaction.response.send_message(f"No GIFs have been added for /{action} yet.",ephemeral=True)
     verbs={"hug":"hugs","kiss":"kisses","slap":"slaps","pat":"pats","cuddle":"cuddles with","bite":"bites"}
-    chosen=random.choice(choices); content=f"{interaction.user.mention} {verbs[action]} {target.mention}"; color=(cfg.get("_colors") or {}).get(action) or "#2B2D31"
+    chosen=random.choice(choices); content=f"{interaction.user.mention} {verbs[action]} {target.mention}"; color=(cfg.get("_colors") or {}).get(action) or "#2B2D31"; author=(cfg.get("_authors") or {}).get(action) or {}; edata={"color":color,"author":author.get("name") or "","author_icon":author.get("icon") or ""}
     if isinstance(chosen,dict) and chosen.get("asset"):
-        path=os.path.join(os.path.dirname(config.DB_PATH),"uploads",os.path.basename(chosen["asset"])); file=discord.File(path,filename=os.path.basename(path)); await interaction.response.send_message(content=content,embed=make_embed({"image":f"attachment://{os.path.basename(path)}","color":color}),file=file)
-    else:await interaction.response.send_message(content=content,embed=make_embed({"image":str(chosen),"color":color}))
+        path=os.path.join(os.path.dirname(config.DB_PATH),"uploads",os.path.basename(chosen["asset"])); file=discord.File(path,filename=os.path.basename(path)); await interaction.response.send_message(content=content,embed=make_embed({**edata,"image":f"attachment://{os.path.basename(path)}"}),file=file)
+    else:await interaction.response.send_message(content=content,embed=make_embed({**edata,"image":str(chosen)}))
 
 @bot.tree.command(description="Hug somebody")
 async def hug(interaction:discord.Interaction,member:discord.Member):await send_gif_action(interaction,member,"hug")

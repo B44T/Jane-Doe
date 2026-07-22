@@ -13,6 +13,9 @@ app.wsgi_app=ProxyFix(app.wsgi_app,x_for=1,x_proto=1,x_host=1)
 app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SESSION_COOKIE_SECURE=bool(os.getenv("RAILWAY_ENVIRONMENT")))
 UPLOAD_DIR=config.UPLOAD_DIR; os.makedirs(UPLOAD_DIR,exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"]=10*1024*1024
+# Dashboard JavaScript changes frequently; always make browsers revalidate it so
+# newly added controls do not disappear behind a stale cached bundle.
+app.config["SEND_FILE_MAX_AGE_DEFAULT"]=0
 
 @app.get("/health")
 def health():
