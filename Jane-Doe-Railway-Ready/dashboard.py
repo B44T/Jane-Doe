@@ -401,6 +401,9 @@ def edit_embed(gid):
         thumb_token=d.get("thumbnail_asset_token")
         if thumb_token:
             path=os.path.join(UPLOAD_DIR,os.path.basename(thumb_token)); kwargs.setdefault("attachments",[]).append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"thumbnail":f"attachment://{os.path.basename(path)}"}; kwargs["embed"]=make_embed(edata)
+        author_token=d.get("author_icon_asset_token")
+        if author_token:
+            path=os.path.join(UPLOAD_DIR,os.path.basename(author_token)); kwargs.setdefault("attachments",[]).append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"author_icon":f"attachment://{os.path.basename(path)}"}; kwargs["embed"]=make_embed(edata)
         old=storage.rows("SELECT component_key FROM message_component_configs WHERE message_id=? AND guild_id=?",(mid,gid))
         if d.get("buttons") or d.get("menus"):
             key=secrets.token_hex(6); components={"buttons":d.get("buttons") or [],"menus":d.get("menus") or []}; storage.set_setting(gid,f"message_components:{key}",components); kwargs["view"]=ActionButtonView(key,components)
