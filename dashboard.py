@@ -54,7 +54,8 @@ def context(gid):
     # Reading it avoids a Discord REST request every time the dashboard refreshes.
     emojis=list(g.emojis)
     static=sum(not e.animated for e in emojis); animated=sum(e.animated for e in emojis); limit=g.emoji_limit
-    avatar_version=getattr(g.me.display_avatar,"key",None) or g.me.id
+    local_avatar=os.path.join(UPLOAD_DIR,f"bot-profile-{g.id}.png")
+    avatar_version=os.stat(local_avatar).st_mtime_ns if os.path.isfile(local_avatar) else (getattr(g.me.display_avatar,"key",None) or g.me.id)
     return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":f"/api/guild/{g.id}/bot-avatar?v={avatar_version}"},emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
 
 @app.get("/api/guild/<int:gid>/bot-avatar")
@@ -62,6 +63,8 @@ def context(gid):
 def bot_avatar(gid):
     g=guild(gid)
     if not g:return Response(status=404)
+    local_path=os.path.join(UPLOAD_DIR,f"bot-profile-{gid}.png")
+    if os.path.isfile(local_path):return send_from_directory(UPLOAD_DIR,os.path.basename(local_path),conditional=True,max_age=300)
     async def work():
         try:member=await g.fetch_member(bot.user.id)
         except (discord.HTTPException,discord.Forbidden):member=g.me
@@ -183,6 +186,8 @@ def bot_profile(gid):
     try:member=bot.submit(work()).result(20)
     except discord.Forbidden:return jsonify(error="The bot cannot update its server profile in this server."),403
     except discord.HTTPException as e:return jsonify(error=e.text or "Discord rejected the profile update."),400
+    if avatar is not None:
+        with open(os.path.join(UPLOAD_DIR,f"bot-profile-{gid}.png"),"wb") as saved:saved.write(avatar)
     current=member or g.me; avatar_version=getattr(current.display_avatar,"key",None) or uuid.uuid4().hex
     return jsonify(ok=True,name=current.display_name,avatar=f"/api/guild/{g.id}/bot-avatar?v={avatar_version}&refresh={uuid.uuid4().hex}")
 
