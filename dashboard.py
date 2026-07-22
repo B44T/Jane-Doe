@@ -264,6 +264,14 @@ def upload_asset(gid):
 @protected
 def saved_asset(gid,token):return send_from_directory(UPLOAD_DIR,os.path.basename(token),conditional=True,max_age=3600)
 
+@app.get("/api/public/asset/<token>")
+def public_asset(token):
+    # Discord must be able to fetch images used through URL-only embed fields.
+    # Tokens are random UUID filenames and cannot traverse outside UPLOAD_DIR.
+    safe=os.path.basename(token)
+    if safe!=token or os.path.splitext(safe)[1].lower() not in (".png",".jpg",".jpeg",".gif",".webp"):return Response(status=404)
+    return send_from_directory(UPLOAD_DIR,safe,conditional=True,max_age=86400)
+
 @app.delete("/api/guild/<int:gid>/asset/<token>")
 @protected
 def delete_saved_asset(gid,token):
