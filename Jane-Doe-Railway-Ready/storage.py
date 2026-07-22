@@ -21,6 +21,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS warnings(id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER, user_id INTEGER, moderator_id INTEGER, reason TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS reaction_roles(guild_id INTEGER, message_id INTEGER, channel_id INTEGER, emoji TEXT, role_id INTEGER, PRIMARY KEY(message_id,emoji));
         CREATE TABLE IF NOT EXISTS glue(guild_id INTEGER, channel_id INTEGER PRIMARY KEY, content TEXT, embed_json TEXT, message_id INTEGER, enabled INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS glue_items(id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, content TEXT, embed_json TEXT, message_id INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS embed_archives(id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, name TEXT NOT NULL, content TEXT, embed_json TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS tickets(id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER, channel_id INTEGER UNIQUE, owner_id INTEGER, panel_key TEXT, status TEXT DEFAULT 'open', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS giveaways(message_id INTEGER PRIMARY KEY, guild_id INTEGER, channel_id INTEGER, prize TEXT, winners INTEGER, ends_at TEXT, ended INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS poll_votes(guild_id INTEGER, poll_key TEXT, user_id INTEGER, option_index INTEGER, PRIMARY KEY(guild_id,poll_key,user_id));
@@ -33,6 +35,9 @@ def init_db():
             try:db.execute(sql)
             except sqlite3.OperationalError:pass
         db.execute("CREATE INDEX IF NOT EXISTS idx_confession_replies_parent ON confession_replies(confession_id,created_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_glue_items_channel ON glue_items(guild_id,channel_id,enabled)")
+        if not db.execute("SELECT 1 FROM glue_items LIMIT 1").fetchone():
+            db.execute("INSERT INTO glue_items(guild_id,channel_id,content,embed_json,message_id,enabled) SELECT guild_id,channel_id,content,embed_json,message_id,enabled FROM glue")
         # Identity lookup was removed; erase identities saved by older releases.
         db.execute("UPDATE confessions SET user_id=0 WHERE user_id!=0")
         db.execute("UPDATE confession_replies SET user_id=0 WHERE user_id!=0")
@@ -58,3 +63,4 @@ def rows(sql, args=()):
 def execute(sql, args=()):
     with LOCK, connect() as db:
         cur=db.execute(sql,args); db.commit(); return cur.lastrowid
+

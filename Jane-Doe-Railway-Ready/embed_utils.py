@@ -27,13 +27,16 @@ def embed_to_dict(embed):
 
 def make_embed_with_files(data):
     data=dict(data or {}); files=[]; upload_dir=os.path.join(os.path.dirname(config.DB_PATH),"uploads")
-    for field,asset_key in (("image","image_asset"),("thumbnail","thumbnail_asset")):
+    for field,asset_key in (("image","image_asset"),("thumbnail","thumbnail_asset"),("author_icon","author_icon_asset"),("footer_icon","footer_icon_asset")):
         token=os.path.basename(str(data.get(asset_key) or "")); path=os.path.join(upload_dir,token)
         if token and os.path.isfile(path):
             files.append(discord.File(path,filename=token)); data[field]=f"attachment://{token}"
     return (make_embed(data) if has_embed_content(data) else None),files
 
-def variables(text, member):
+def variables(text, member, extra=None):
     if not text: return text
     guild=member.guild
-    return text.replace("{user}",member.mention).replace("{username}",member.name).replace("{display_name}",member.display_name).replace("{server}",guild.name).replace("{member_count}",str(guild.member_count or 0))
+    result=text.replace("{user}",member.mention).replace("{username}",member.name).replace("{display_name}",member.display_name).replace("{server}",guild.name).replace("{member_count}",str(guild.member_count or 0))
+    for key,value in (extra or {}).items():result=result.replace("{"+key+"}",str(value))
+    return result
+
