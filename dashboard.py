@@ -1,4 +1,4 @@
-import asyncio, io, json, secrets, os, re, uuid
+import asyncio, base64, io, json, secrets, os, re, uuid
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import Flask, Response, jsonify, redirect, render_template, request, send_from_directory, session, url_for
@@ -11,8 +11,17 @@ from embed_utils import make_embed, has_embed_content, embed_to_dict, make_embed
 app=Flask(__name__); app.secret_key=config.SECRET
 app.wsgi_app=ProxyFix(app.wsgi_app,x_for=1,x_proto=1,x_host=1)
 app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SESSION_COOKIE_SECURE=bool(os.getenv("RAILWAY_ENVIRONMENT")))
+app.config["SEND_FILE_MAX_AGE_DEFAULT"]=0
 UPLOAD_DIR=config.UPLOAD_DIR; os.makedirs(UPLOAD_DIR,exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"]=10*1024*1024
+
+@app.after_request
+def prevent_stale_dashboard_assets(response):
+    if request.path.startswith("/static/"):
+        response.headers["Cache-Control"]="no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"]="no-cache"
+        response.headers["Expires"]="0"
+    return response
 
 @app.get("/health")
 def health():
@@ -180,9 +189,16 @@ def bot_profile(gid):
             image=Image.open(io.BytesIO(avatar_file.read())).convert("RGBA"); image.thumbnail((512,512),Image.Resampling.LANCZOS); out=io.BytesIO(); image.save(out,"PNG",optimize=True); avatar=out.getvalue()
         except OSError:return jsonify(error="Use a valid PNG, JPG, GIF, or WEBP image."),400
     async def work():
-        kwargs={"nick":nickname,"reason":"Server bot profile updated from dashboard"}
-        if avatar is not None:kwargs["avatar"]=avatar
-        return await g.me.edit(**kwargs)
+        # discord.py 2.6 does not expose avatar/banner on Member.edit yet.
+        # Discord's Modify Current Member endpoint does support a base64 data URI.
+        payload={"nick":nickname}
+        if avatar is not None:payload["avatar"]="data:image/png;base64,"+base64.b64encode(avatar).decode("ascii")
+        route=discord.http.Route("PATCH","/guilds/{guild_id}/members/@me",guild_id=g.id)
+        data=await bot.http.request(route,json=payload,reason="Server bot profile updated from dashboard")
+        try:return await g.fetch_member(bot.user.id)
+        except discord.HTTPException:
+            if isinstance(data,dict):g.me._update(data)
+            return g.me
     try:member=bot.submit(work()).result(20)
     except discord.Forbidden:return jsonify(error="The bot cannot update its server profile in this server."),403
     except discord.HTTPException as e:return jsonify(error=e.text or "Discord rejected the profile update."),400
