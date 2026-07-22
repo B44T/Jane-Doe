@@ -11,6 +11,7 @@ intents=discord.Intents.default(); intents.members=True; intents.message_content
 member_cache=discord.MemberCacheFlags.all()
 bot=commands.Bot(command_prefix="!",intents=intents,application_id=config.APPLICATION_ID,member_cache_flags=member_cache,max_messages=3000)
 suppressed_delete_logs=set()
+invite_snapshots={}
 
 async def resolve_member(guild,user_id):
     member=guild.get_member(user_id)
@@ -20,8 +21,12 @@ async def resolve_member(guild,user_id):
 
 def staff(interaction): return interaction.user.guild_permissions.manage_guild
 def component_emoji(value):
+    value=str(value or "").strip()
     if not value:return None
-    try:return discord.PartialEmoji.from_str(str(value))
+    # Discord rejects an entire component when its emoji is ordinary text or
+    # mojibake. Accept only a complete custom emoji code or a real Unicode emoji.
+    if not re.fullmatch(r"<(?:a)?:[A-Za-z0-9_]{2,32}:\d{15,22}>",value) and (all(ord(c)<0x2000 for c in value) or "ðŸ" in value or "ï¸" in value):return None
+    try:return discord.PartialEmoji.from_str(value)
     except (TypeError,ValueError):return None
 
 def ordinal(number):
@@ -68,11 +73,11 @@ class TicketPanel(discord.ui.View):
         super().__init__(timeout=None); self.key=key; self.cfg=cfg or {}
         options=self.cfg.get("options") or []
         if self.cfg.get("mode")=="select" and options:
-            select=discord.ui.Select(placeholder=self.cfg.get("placeholder") or "Choose a ticket type",custom_id=f"ticket:select:{key}",min_values=1,max_values=1,options=[discord.SelectOption(label=o.get("label","Ticket")[:100],value=str(i),description=(o.get("description") or None),emoji=component_emoji(o.get("emoji"))) for i,o in enumerate(options[:25])])
+            select=discord.ui.Select(placeholder=(self.cfg.get("placeholder") or "Choose a ticket type")[:150],custom_id=f"ticket:select:{key}",min_values=1,max_values=1,options=[discord.SelectOption(label=(o.get("label") or "Ticket")[:100],value=str(i),description=(o.get("description") or "")[:100] or None,emoji=component_emoji(o.get("emoji"))) for i,o in enumerate(options[:25])])
             async def selected(interaction):await self.open_ticket(interaction,int(select.values[0]))
             select.callback=selected; self.add_item(select)
         else:
-            button=discord.ui.Button(label=self.cfg.get("button_label","Open ticket"),emoji=component_emoji(self.cfg.get("button_emoji")),style=discord.ButtonStyle.primary,custom_id=f"ticket:open:{key}")
+            button=discord.ui.Button(label=(self.cfg.get("button_label") or "Open ticket")[:80],emoji=component_emoji(self.cfg.get("button_emoji")),style=discord.ButtonStyle.primary,custom_id=f"ticket:open:{key}")
             async def clicked(interaction):await self.open_ticket(interaction,0)
             button.callback=clicked; self.add_item(button)
     async def open_ticket(self,interaction,option_index=0):
@@ -276,6 +281,8 @@ async def on_ready():
         try:bot.add_view(view); restored+=1
         except Exception as e:failed+=1; print(f"Could not restore {label}: {type(e).__name__}: {e}")
     for guild in bot.guilds:
+        try:invite_snapshots[guild.id]={i.code:i.uses or 0 for i in await guild.invites()}
+        except (discord.Forbidden,discord.HTTPException):invite_snapshots[guild.id]={}
         for key in storage.rows("SELECT key,value FROM settings WHERE guild_id=? AND key LIKE 'ticket_panel:%'",(guild.id,)):
             try:cfg=json.loads(key['value']); panel_key=key['key'].split(':',1)[1]; restore(TicketPanel(panel_key,cfg),key['key'])
             except Exception as e:failed+=1; print(f"Could not load {key['key']}: {type(e).__name__}: {e}")
@@ -289,8 +296,8 @@ async def on_ready():
             try:cfg=json.loads(row['value']); view=ActionButtonView(row['key'].split(':',1)[1],cfg)
             except Exception as e:failed+=1; print(f"Could not load {row['key']}: {type(e).__name__}: {e}"); continue
             if view.is_persistent():restore(view,row['key'])
-        for row in storage.rows("SELECT * FROM glue WHERE guild_id=? AND enabled=1",(guild.id,)):
-            try:cfg=storage.get_setting(guild.id,f"glue_options:{row['channel_id']}",{}); restore(GlueTemplateView(row['channel_id'],cfg),f"glue:{row['channel_id']}")
+        for row in storage.rows("SELECT * FROM glue_items WHERE guild_id=? AND enabled=1",(guild.id,)):
+            try:cfg=storage.get_setting(guild.id,f"glue_options:{row['id']}",{}); restore(GlueTemplateView(row['channel_id'],cfg),f"glue:{row['id']}")
             except Exception as e:failed+=1; print(f"Could not load glue:{row['channel_id']}: {type(e).__name__}: {e}")
     print(f"Restored {restored} persistent component handler(s)"+(f"; {failed} invalid configuration(s) skipped" if failed else ""))
     if not birthday_check.is_running(): birthday_check.start()
@@ -360,10 +367,17 @@ async def on_interaction(interaction):
 @bot.event
 async def on_member_join(member):
     cfg=storage.get_setting(member.guild.id,"welcome",{})
+    invite_extra={"inviter":"Unknown","inviter_mention":"Unknown","invite_code":"Unknown","invite_uses":"0"}
+    if cfg.get("invite_tracking"):
+        try:
+            current=await member.guild.invites(); previous=invite_snapshots.get(member.guild.id,{})
+            used=next((i for i in current if (i.uses or 0)>previous.get(i.code,0)),None); invite_snapshots[member.guild.id]={i.code:i.uses or 0 for i in current}
+            if used:invite_extra={"inviter":used.inviter.display_name if used.inviter else "Unknown","inviter_mention":used.inviter.mention if used.inviter else "Unknown","invite_code":used.code,"invite_uses":str(used.uses or 0)}
+        except (discord.Forbidden,discord.HTTPException):pass
     channel=member.guild.get_channel(int(cfg.get("channel_id") or 0))
     if cfg.get("enabled") and channel:
-        edata={k:variables(v,member) if isinstance(v,str) else v for k,v in cfg.get("embed",{}).items()}
-        embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content", ""),member) or None,embed=embed,files=files)
+        edata={k:variables(v,member,invite_extra) if isinstance(v,str) else v for k,v in cfg.get("embed",{}).items()}
+        embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content", ""),member,invite_extra) or None,embed=embed,files=files)
     role=member.guild.get_role(int(cfg.get("role_id") or 0))
     if role:
         try: await member.add_roles(role,reason="Welcome role")
@@ -446,14 +460,15 @@ async def on_message(message):
                 try:await message.author.send(f"Your confession could not be posted after Discord accepted the anonymous conversion. Here is a private recovery copy:\n\n{message.content or '[attachment-only confession]'}")
                 except discord.HTTPException:pass
             return
-    row=storage.rows("SELECT * FROM glue WHERE channel_id=? AND enabled=1",(message.channel.id,))
-    if row:
-        g=row[0]
+    rows=storage.rows("SELECT * FROM glue_items WHERE guild_id=? AND channel_id=? AND enabled=1 ORDER BY id",(message.guild.id,message.channel.id))
+    for g in rows:
         try:
             if g['message_id']: await message.channel.get_partial_message(g['message_id']).delete()
-        except discord.NotFound: pass
-        edata=json.loads(g['embed_json']) if g['embed_json'] else {}; embed,files=make_embed_with_files(edata); opts=storage.get_setting(message.guild.id,f"glue_options:{message.channel.id}",{}); view=GlueTemplateView(message.channel.id,opts) if opts.get("template_enabled") else None; sent=await message.channel.send(g['content'] or None,embed=embed,files=files,view=view)
-        storage.execute("UPDATE glue SET message_id=? WHERE channel_id=?",(sent.id,message.channel.id))
+        except (discord.NotFound,discord.Forbidden): pass
+        try:
+            edata=json.loads(g['embed_json']) if g['embed_json'] else {}; embed,files=make_embed_with_files(edata); opts=storage.get_setting(message.guild.id,f"glue_options:{g['id']}",{}); view=GlueTemplateView(message.channel.id,opts) if opts.get("template_enabled") else None; sent=await message.channel.send(g['content'] or None,embed=embed,files=files,view=view)
+            storage.execute("UPDATE glue_items SET message_id=? WHERE id=?",(sent.id,g['id']))
+        except discord.HTTPException as e:print(f"Could not refresh glue item {g['id']}: {e}")
     await bot.process_commands(message)
 
 @bot.event

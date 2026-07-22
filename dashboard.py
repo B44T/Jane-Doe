@@ -348,13 +348,20 @@ def purge_delete(gid):
 @app.post("/api/guild/<int:gid>/embed/send")
 @protected
 def send_embed(gid):
-    d=request.get_json(force=True); g=guild(gid); channel=g.get_channel(int(d["channel_id"]))
+    d=request.get_json(force=True); g=guild(gid)
+    try:channel=g.get_channel(int(d.get("channel_id") or 0))
+    except (TypeError,ValueError):channel=None
+    if not channel or not hasattr(channel,"send"):return jsonify(error="Choose a valid text channel."),400
+    perms=channel.permissions_for(g.me)
+    if not perms.view_channel or not perms.send_messages:return jsonify(error=f"Jane Doe needs View Channel and Send Messages in #{channel.name}."),403
     async def work():
-        files=[]; edata=d.get("embed") or {}; token=d.get("asset_token"); thumb_token=d.get("thumbnail_asset_token"); component_key=None
+        files=[]; edata=d.get("embed") or {}; token=d.get("asset_token"); thumb_token=d.get("thumbnail_asset_token"); author_token=d.get("author_asset_token"); component_key=None
         if token:
             path=os.path.join(UPLOAD_DIR,os.path.basename(token)); files.append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"image":f"attachment://{os.path.basename(path)}"}
         if thumb_token:
             path=os.path.join(UPLOAD_DIR,os.path.basename(thumb_token)); files.append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"thumbnail":f"attachment://{os.path.basename(path)}"}
+        if author_token:
+            path=os.path.join(UPLOAD_DIR,os.path.basename(author_token)); files.append(discord.File(path,filename=os.path.basename(path))); edata={**edata,"author_icon":f"attachment://{os.path.basename(path)}"}
         view=None
         if d.get("buttons") or d.get("menus"):
             component_key=secrets.token_hex(6); components={"buttons":d.get("buttons") or [],"menus":d.get("menus") or []}; storage.set_setting(gid,f"message_components:{component_key}",components); view=ActionButtonView(component_key,components)
@@ -362,7 +369,10 @@ def send_embed(gid):
         msg=await channel.send(content=d.get("content") or None,embed=make_embed(edata) if has_embed_content(edata) else None,files=files,view=view)
         if component_key:storage.execute("INSERT OR REPLACE INTO message_component_configs VALUES(?,?,?)",(msg.id,gid,component_key))
         return str(msg.id)
-    return jsonify(ok=True,message_id=bot.submit(work()).result(15))
+    try:return jsonify(ok=True,message_id=bot.submit(work()).result(20))
+    except discord.Forbidden:return jsonify(error=f"Discord blocked posting in #{channel.name}. Check View Channel, Send Messages, and Embed Links permissions."),403
+    except discord.HTTPException as e:return jsonify(error=f"Discord rejected the message: {e.text or str(e)}"),400
+    except Exception as e:app.logger.exception("Embed send failed"); return jsonify(error=f"Could not post in #{channel.name}: {type(e).__name__}"),500
 
 @app.post("/api/guild/<int:gid>/embed/edit")
 @protected
@@ -398,13 +408,24 @@ def edit_embed(gid):
 @app.post("/api/guild/<int:gid>/ticket-panel")
 @protected
 def ticket_panel(gid):
-    d=request.get_json(force=True); key=d.get("key") or secrets.token_hex(4); storage.set_setting(gid,f"ticket_panel:{key}",d); channel=guild(gid).get_channel(int(d["channel_id"]))
+    d=request.get_json(force=True); g=guild(gid); key=d.get("key") or secrets.token_hex(4)
+    try:channel=g.get_channel(int(d.get("channel_id") or 0))
+    except (TypeError,ValueError):channel=None
+    if not channel or not hasattr(channel,"send"):return jsonify(error="Choose a valid text channel for the ticket panel."),400
+    permissions=channel.permissions_for(g.me)
+    if not permissions.view_channel or not permissions.send_messages:return jsonify(error=f"Jane cannot post in #{channel.name}. Discord reports View Channel or Send Messages is disabled for the bot's server member."),403
+    if has_embed_content(d.get("embed")) and not permissions.embed_links:return jsonify(error=f"Jane needs Embed Links in #{channel.name} to publish this panel."),403
     async def work():
         view=TicketPanel(key,d)
         bot.add_view(view)
         embed,files=make_embed_with_files(d.get("embed")); msg=await channel.send(content=d.get("content") or None,embed=embed,files=files,view=view); return str(msg.id)
-    try:return jsonify(ok=True,key=key,message_id=bot.submit(work()).result(15))
-    except discord.HTTPException as e:return jsonify(error=f"Discord rejected the ticket panel: {e.text or str(e)}"),400
+    try:message_id=bot.submit(work()).result(20)
+    except discord.Forbidden as e:return jsonify(error=f"Discord returned Forbidden for #{channel.name}, even though the dashboard sees Administrator={g.me.guild_permissions.administrator}. Check whether Jane's current server member is the same bot application and whether the channel is restricted by an external integration. ({e.text or 'code 403'})"),403
+    except (TypeError,ValueError) as e:return jsonify(error=f"The ticket panel has an invalid button, dropdown, label, or emoji: {e}"),400
+    except discord.HTTPException as e:return jsonify(error=f"Discord rejected the ticket panel configuration ({e.code}): {e.text or str(e)}"),400
+    except Exception as e:app.logger.exception("Ticket panel publish failed"); return jsonify(error=f"Ticket panel could not be built: {type(e).__name__}: {e}"),400
+    storage.set_setting(gid,f"ticket_panel:{key}",d)
+    return jsonify(ok=True,key=key,message_id=message_id)
 
 @app.post("/api/guild/<int:gid>/reaction-role")
 @protected
@@ -428,14 +449,39 @@ def reaction_panel(gid):
 @app.post("/api/guild/<int:gid>/glue")
 @protected
 def glue(gid):
-    d=request.get_json(force=True); channel_id=int(d['channel_id']); storage.execute("INSERT INTO glue(guild_id,channel_id,content,embed_json,enabled) VALUES(?,?,?,?,1) ON CONFLICT(channel_id) DO UPDATE SET content=excluded.content,embed_json=excluded.embed_json,enabled=1",(gid,channel_id,d.get('content'),json.dumps(d.get('embed')) if d.get('embed') else None)); storage.set_setting(gid,f"glue_options:{channel_id}",{"template_enabled":d.get("template_enabled",False),"template":d.get("template", ""),"button_label":d.get("button_label","Show template"),"button_emoji":d.get("button_emoji","")}); return jsonify(ok=True)
+    d=request.get_json(force=True); channel_id=int(d['channel_id']); item_id=d.get("id"); raw=json.dumps(d.get('embed')) if d.get('embed') else None
+    if item_id:storage.execute("UPDATE glue_items SET channel_id=?,content=?,embed_json=?,enabled=1 WHERE id=? AND guild_id=?",(channel_id,d.get('content'),raw,int(item_id),gid)); saved_id=int(item_id)
+    else:saved_id=storage.execute("INSERT INTO glue_items(guild_id,channel_id,content,embed_json,enabled) VALUES(?,?,?,?,1)",(gid,channel_id,d.get('content'),raw))
+    storage.set_setting(gid,f"glue_options:{saved_id}",{"template_enabled":d.get("template_enabled",False),"template":d.get("template", ""),"button_label":d.get("button_label","Show template"),"button_emoji":d.get("button_emoji","")}); return jsonify(ok=True,id=saved_id)
 
 @app.get("/api/guild/<int:gid>/glue")
 @protected
 def get_glue(gid):
-    rows=storage.rows("SELECT * FROM glue WHERE guild_id=? AND enabled=1 ORDER BY channel_id LIMIT 1",(gid,))
-    if not rows:return jsonify(enabled=False)
-    row=rows[0]; options=storage.get_setting(gid,f"glue_options:{row['channel_id']}",{}); return jsonify(enabled=True,channel_id=str(row['channel_id']),content=row.get('content') or '',embed=json.loads(row['embed_json']) if row.get('embed_json') else {},**options)
+    rows=storage.rows("SELECT * FROM glue_items WHERE guild_id=? AND enabled=1 ORDER BY created_at,id",(gid,)); items=[]
+    for row in rows:items.append({"id":row["id"],"channel_id":str(row["channel_id"]),"content":row.get("content") or "","embed":json.loads(row["embed_json"]) if row.get("embed_json") else {},**storage.get_setting(gid,f"glue_options:{row['id']}",{})})
+    return jsonify(enabled=bool(items),items=items)
+
+@app.delete("/api/guild/<int:gid>/glue/<int:item_id>")
+@protected
+def delete_glue(gid,item_id):
+    storage.execute("UPDATE glue_items SET enabled=0 WHERE id=? AND guild_id=?",(item_id,gid)); return jsonify(ok=True)
+
+@app.route("/api/guild/<int:gid>/archives",methods=["GET","POST"])
+@protected
+def archives(gid):
+    if request.method=="GET":
+        rows=storage.rows("SELECT * FROM embed_archives WHERE guild_id=? ORDER BY updated_at DESC,id DESC",(gid,))
+        items=[]
+        for row in rows:
+            raw=row.pop("embed_json",None); row["embed"]=json.loads(raw or "{}"); items.append(row)
+        return jsonify(archives=items)
+    d=request.get_json(force=True); name=(d.get("name") or d.get("embed",{}).get("title") or "Untitled embed")[:100]
+    archive_id=storage.execute("INSERT INTO embed_archives(guild_id,name,content,embed_json) VALUES(?,?,?,?)",(gid,name,d.get("content") or "",json.dumps(d.get("embed") or {})))
+    return jsonify(ok=True,id=archive_id)
+
+@app.delete("/api/guild/<int:gid>/archives/<int:archive_id>")
+@protected
+def delete_archive(gid,archive_id):storage.execute("DELETE FROM embed_archives WHERE id=? AND guild_id=?",(archive_id,gid)); return jsonify(ok=True)
 
 @app.post("/api/guild/<int:gid>/giveaway")
 @protected
