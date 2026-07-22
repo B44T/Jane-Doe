@@ -28,10 +28,6 @@ def prevent_stale_dashboard_assets(response):
         response.headers["Cache-Control"]="no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"]="no-cache"
         response.headers["Expires"]="0"
-    # Older authenticated dashboard HTML referenced the retired slider editor.
-    # Chromium's back/forward cache can retain that whole page despite a new
-    # deployment, so explicitly discard cached site resources on dashboard loads.
-    if request.path=="/" and response.mimetype=="text/html":response.headers["Clear-Site-Data"]='"cache"'
     return response
 
 @app.get("/health")
