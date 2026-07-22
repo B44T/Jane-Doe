@@ -14,7 +14,7 @@ app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE="Lax",SES
 app.config["SEND_FILE_MAX_AGE_DEFAULT"]=0
 UPLOAD_DIR=config.UPLOAD_DIR; os.makedirs(UPLOAD_DIR,exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"]=10*1024*1024
-ASSET_VERSION=str(max(os.path.getmtime(os.path.join(app.static_folder,name)) for name in ("app.js","app.css","goth.css")))
+ASSET_VERSION=str(max(os.path.getmtime(os.path.join(app.static_folder,name)) for name in ("app.js","crop-editor.js","app.css","goth.css")))
 
 @app.url_defaults
 def version_static_assets(endpoint,values):
@@ -31,7 +31,7 @@ def prevent_stale_dashboard_assets(response):
 @app.get("/health")
 def health():
     ready=bot.is_ready()
-    return jsonify(status="ok" if ready else "starting",discord_ready=ready),200 if ready else 503
+    return jsonify(status="ok" if ready else "starting",discord_ready=ready,ui_version=ASSET_VERSION,crop_editor="standalone-drag-v2"),200 if ready else 503
 
 def protected(fn):
     @wraps(fn)
@@ -57,7 +57,10 @@ async def register_view(view):bot.add_view(view); return True
 
 @app.get("/")
 @protected
-def home(): return render_template("dashboard.html",guilds=guilds(),application_id=config.APPLICATION_ID)
+def home():
+    html=render_template("dashboard.html",guilds=guilds(),application_id=config.APPLICATION_ID)
+    crop_url=url_for("static",filename="crop-editor.js")
+    return html.replace("</body>",f'<script src="{crop_url}" defer></script></body>')
 
 @app.get("/api/guild/<int:gid>/context")
 @protected
