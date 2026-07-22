@@ -66,8 +66,8 @@ def guild(gid):
 async def register_view(view):bot.add_view(view); return True
 
 @app.get("/")
-@protected
 def home():
+    if not session.get("ok"):return render_template("login.html",error=False)
     html=render_template("dashboard.html",guilds=guilds(),application_id=config.APPLICATION_ID)
     enhancements_url=url_for("static",filename="enhancements.js"); crop_url=url_for("crop_editor_asset",release=RELEASE)
     return html.replace("</body>",f'<script src="{enhancements_url}" defer></script><script src="{crop_url}" defer></script></body>')
