@@ -341,7 +341,10 @@ def command_delete(gid,name):
     command=bot.tree.get_command(name)
     if not command:return jsonify(error="That command is already deleted."),404
     disabled=set(storage.get_setting(0,"disabled_commands",[])); disabled.add(name); storage.set_setting(0,"disabled_commands",sorted(disabled)); bot.tree.remove_command(name)
-    async def work():await bot.tree.sync()
+    async def work():
+        if config.GUILD_ID:
+            target=discord.Object(id=config.GUILD_ID); bot.tree.remove_command(name,guild=target); await bot.tree.sync(guild=target)
+        else:await bot.tree.sync()
     try:bot.submit(work()).result(30)
     except discord.HTTPException as e:return jsonify(error=e.text or "Discord could not update the command list."),400
     return jsonify(ok=True)

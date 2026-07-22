@@ -266,7 +266,13 @@ async def post_confession_reply(interaction,confession_id,content):
 async def on_ready():
     await bot.change_presence(status=discord.Status.online,activity=discord.Game(name="Managing the server"))
     if not getattr(bot,"commands_synced",False):
-        for command_name in storage.get_setting(0,"disabled_commands",[]):bot.tree.remove_command(command_name)
+        disabled=set(storage.get_setting(0,"disabled_commands",[]))
+        # These commands are core publishing tools requested for both Discord
+        # and the dashboard. Clear stale dashboard-deletion flags from older
+        # deployments so Discord cannot retain an unregistered cached command.
+        disabled.difference_update({"announce","poll","event"})
+        storage.set_setting(0,"disabled_commands",sorted(disabled))
+        for command_name in disabled:bot.tree.remove_command(command_name)
         # Guild commands update immediately. Global command changes can remain
         # cached for an hour and Discord reports those stale definitions as
         # "outdated". Use the configured single-server scope when available.
