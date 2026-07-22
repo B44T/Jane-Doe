@@ -27,6 +27,10 @@ def prevent_stale_dashboard_assets(response):
         response.headers["Cache-Control"]="no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"]="no-cache"
         response.headers["Expires"]="0"
+    # Older authenticated dashboard HTML referenced the retired slider editor.
+    # Chromium's back/forward cache can retain that whole page despite a new
+    # deployment, so explicitly discard cached site resources on dashboard loads.
+    if request.path=="/" and response.mimetype=="text/html":response.headers["Clear-Site-Data"]='"cache"'
     return response
 
 @app.get("/health")
@@ -77,7 +81,7 @@ def context(gid):
     emojis=list(g.emojis)
     static=sum(not e.animated for e in emojis); animated=sum(e.animated for e in emojis); limit=g.emoji_limit
     local_avatar=os.path.join(UPLOAD_DIR,f"bot-profile-{g.id}.png"); fallback=str(g.me.display_avatar.url)
-    avatar=f"/api/guild/{g.id}/bot-avatar?v={os.stat(local_avatar).st_mtime_ns}" if os.path.isfile(local_avatar) else fallback
+    avatar=f"/api/guild/{g.id}/bot-avatar?v={os.stat(local_avatar).st_mtime_ns if os.path.isfile(local_avatar) else getattr(g.me.display_avatar,'key',g.me.id)}"
     return jsonify(guild={"id":str(g.id),"name":g.name,"icon":str(g.icon.url) if g.icon else None},bot_profile={"name":g.me.display_name,"avatar":avatar,"avatar_fallback":fallback},ui_version=ASSET_VERSION,emoji_capacity={"limit_per_type":limit,"static_used":static,"static_available":max(0,limit-static),"animated_used":animated,"animated_available":max(0,limit-animated)},channels=[{"id":str(c.id),"name":c.name,"type":str(c.type)} for c in g.channels if hasattr(c,"name")],roles=[{"id":str(r.id),"name":r.name,"color":str(r.color)} for r in g.roles if not r.is_default()],emojis=[emoji_json(e) for e in emojis])
 
 @app.get("/api/guild/<int:gid>/bot-avatar")
@@ -87,15 +91,11 @@ def bot_avatar(gid):
     if not g:return Response(status=404)
     local_path=os.path.join(UPLOAD_DIR,f"bot-profile-{gid}.png")
     if os.path.isfile(local_path):return send_from_directory(UPLOAD_DIR,os.path.basename(local_path),conditional=True,max_age=300)
-    async def work():
-        try:member=await g.fetch_member(bot.user.id)
-        except (discord.HTTPException,discord.Forbidden):member=g.me
-        asset=member.display_avatar.with_size(256)
-        return await asset.read(),asset.is_animated()
-    try:data,animated=bot.submit(work()).result(15)
-    except (discord.HTTPException,asyncio.TimeoutError):return Response(status=502)
-    mime="image/gif" if animated else "image/png"
-    return Response(data,mimetype=mime,headers={"Cache-Control":"private, max-age=300"})
+    try:
+        upstream=requests.get(str(g.me.display_avatar.with_size(256)),headers={"User-Agent":"Jane-Doe-by-B4T/1.0"},timeout=8)
+        upstream.raise_for_status()
+    except requests.RequestException:return Response(status=502)
+    return Response(upstream.content,mimetype=upstream.headers.get("Content-Type","image/png"),headers={"Cache-Control":"private, max-age=300"})
 
 def emoji_json(e):return {"id":str(e.id),"name":e.name,"url":str(e.url),"proxy_url":f"/api/emoji/{e.id}?animated={1 if e.animated else 0}","animated":e.animated,"text":str(e)}
 
