@@ -601,7 +601,7 @@ async def on_member_join(member):
         except (discord.Forbidden,discord.HTTPException,FileNotFoundError) as error:
             print(f"Welcome announcement failed in {member.guild.id}: {type(error).__name__}: {error}")
     if cfg.get("invite_tracking"):
-        tracking_channel=member.guild.get_channel(int(cfg.get("tracking_channel_id") or 0))
+        tracking_channel=member.guild.get_channel(int(cfg.get("tracking_channel_id") or 0)) or channel
         if tracking_channel:
             inviter,code,uses=await invite_attribution(member.guild)
             custom=variables(cfg.get("tracking_content",""),member)
@@ -611,6 +611,8 @@ async def on_member_join(member):
             try:await tracking_channel.send(content=(custom+"\n"+tracked).strip())
             except (discord.Forbidden,discord.HTTPException) as error:
                 print(f"Tracking welcome failed in {member.guild.id}: {type(error).__name__}: {error}")
+        else:
+            print(f"Tracking welcome skipped in {member.guild.id}: no tracking or welcome channel configured")
     role=member.guild.get_role(int(cfg.get("role_id") or 0))
     if role:
         try: await member.add_roles(role,reason="Welcome role")
