@@ -228,15 +228,39 @@ def locate_message(g,raw_id,preferred_channel=None):
     if not channel:raise ValueError("Choose the message's channel, or paste its full Discord message link.")
     return channel,message_id
 
+async def find_message(g,raw_id,preferred_channel=None):
+    """Find a pasted message even when the selected channel is not its channel."""
+    raw=str(raw_id or "").strip(); match=re.search(r"channels/\d+/(\d+)/(\d+)",raw)
+    try:message_id=int(match.group(2) if match else raw)
+    except (TypeError,ValueError):raise ValueError("Enter a valid message ID or full Discord message link.")
+    candidates=[]
+    async def add_channel(channel_id):
+        if not channel_id:return
+        channel=g.get_channel(int(channel_id))
+        if channel is None:
+            try:channel=await bot.fetch_channel(int(channel_id))
+            except (discord.NotFound,discord.Forbidden,discord.HTTPException):return
+        if channel not in candidates:candidates.append(channel)
+    if match:await add_channel(match.group(1))
+    else:
+        await add_channel(preferred_channel)
+        indexed=storage.rows("SELECT channel_id FROM bot_messages WHERE guild_id=? AND message_id=? UNION SELECT channel_id FROM reaction_roles WHERE guild_id=? AND message_id=?",(g.id,message_id,g.id,message_id))
+        for row in indexed:await add_channel(row["channel_id"])
+        for channel in [*g.text_channels,*g.threads]:
+            if channel not in candidates:candidates.append(channel)
+    for channel in candidates:
+        try:return channel,await channel.fetch_message(message_id)
+        except (discord.NotFound,discord.Forbidden,discord.HTTPException):continue
+    raise LookupError("Message not found")
+
 @app.post("/api/guild/<int:gid>/embed/load")
 @protected
 def load_embed(gid):
     d=request.get_json(force=True); g=guild(gid)
-    try:channel,mid=locate_message(g,d.get("message_id"),d.get("channel_id"))
+    async def work():return await find_message(g,d.get("message_id"),d.get("channel_id"))
+    try:channel,msg=bot.submit(work()).result(30)
     except (ValueError,TypeError):return jsonify(error="Enter a valid message ID or full Discord message link."),400
-    async def work():return await channel.fetch_message(mid)
-    try:msg=bot.submit(work()).result(15)
-    except discord.NotFound:return jsonify(error="Message not found in that channel. Paste the full message link to avoid selecting the wrong channel."),404
+    except LookupError:return jsonify(error="Message not found in that server, or Jane Doe cannot view its channel. Try the full Discord message link."),404
     except discord.Forbidden:return jsonify(error="The bot cannot read that channel or its message history."),403
     embeds=[embed_to_dict(e) for e in msg.embeds]
     return jsonify(ok=True,channel_id=str(channel.id),message_id=str(msg.id),content=msg.content,embed=embeds[0] if embeds else {},embeds=embeds,components=message_components(gid,msg))
