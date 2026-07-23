@@ -260,6 +260,27 @@ class AfkPingView(discord.ui.View):
             await interaction.response.send_message("I'll let you know when they are back.",ephemeral=True)
         leave.callback=leave_clicked; watch.callback=watch_clicked; self.add_item(leave); self.add_item(watch)
 
+async def add_stolen_emoji(interaction,emoji_id,animated,name):
+    permissions=interaction.user.guild_permissions
+    if not (permissions.manage_expressions or permissions.manage_guild):return await interaction.response.send_message("You need **Create Expressions** or **Manage Server** to steal this emoji.",ephemeral=True)
+    if not interaction.guild.me.guild_permissions.create_expressions:return await interaction.response.send_message("Jane Doe needs the **Create Expressions** permission.",ephemeral=True)
+    extension="gif" if animated else "png"; url=f"https://cdn.discordapp.com/emojis/{emoji_id}.{extension}?quality=lossless"
+    await interaction.response.defer(ephemeral=True)
+    try:
+        response=requests.get(url,timeout=10); response.raise_for_status()
+        created=await interaction.guild.create_custom_emoji(name=name,image=response.content,reason=f"Stolen by {interaction.user}")
+    except requests.RequestException:return await interaction.followup.send("That emoji image could not be downloaded from Discord.",ephemeral=True)
+    except discord.Forbidden:return await interaction.followup.send("Discord denied the upload. Check Jane Doe's **Create Expressions** permission and role position.",ephemeral=True)
+    except discord.HTTPException as error:return await interaction.followup.send(f"Discord could not add the emoji: {error.text or str(error)}",ephemeral=True)
+    await interaction.followup.send(f"Added {created} to **{interaction.guild.name}**.",ephemeral=True)
+
+class StealEmojiView(discord.ui.View):
+    def __init__(self,emoji_id,animated,name):
+        super().__init__(timeout=None); self.emoji_id=int(emoji_id); self.animated=bool(animated); self.name=name
+        button=discord.ui.Button(label="Steal emoji",emoji="📥",style=discord.ButtonStyle.primary,custom_id=f"stealemoji:add:{self.emoji_id}:{int(self.animated)}:{self.name}")
+        async def clicked(interaction):await add_stolen_emoji(interaction,self.emoji_id,self.animated,self.name)
+        button.callback=clicked; self.add_item(button)
+
 async def clear_afk(guild,member):
     active=storage.rows("SELECT * FROM afk_statuses WHERE guild_id=? AND user_id=?",(guild.id,member.id))
     if not active:return False
@@ -513,6 +534,8 @@ async def on_interaction(interaction):
                 if interaction.user.id==target_id:return await interaction.response.send_message("That is you—you'll know when you're back!",ephemeral=True)
                 storage.execute("INSERT OR IGNORE INTO afk_watchers(guild_id,target_id,watcher_id) VALUES(?,?,?)",(guild_id,target_id,interaction.user.id))
                 return await interaction.response.send_message("I'll let you know when they are back.",ephemeral=True)
+        if prefix=="stealemoji" and len(parts)>=5 and parts[1]=="add":
+            return await add_stolen_emoji(interaction,int(parts[2]),bool(int(parts[3])),parts[4])
         await interaction.response.send_message(f"This button uses an unsupported or deleted configuration (`{clipped(custom_id,80)}`). Republish that specific panel; this is not a bot-permissions error.",ephemeral=True)
     except Exception as e:
         print(f"Persistent component fallback failed for {custom_id}: {type(e).__name__}: {e}")
@@ -777,10 +800,13 @@ async def purge(interaction:discord.Interaction,amount:app_commands.Range[int,1,
 async def stealemoji(interaction:discord.Interaction,emoji:str,name:str|None=None):
     match=re.search(r"<(a?):([A-Za-z0-9_]+):(\d+)>",emoji)
     if not match:return await interaction.response.send_message("Paste a custom Discord emoji such as `<:name:123>`.",ephemeral=True)
-    if not interaction.guild.me.guild_permissions.create_expressions:return await interaction.response.send_message("Jane Doe needs the **Create Expressions** permission.",ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
-    ext="gif" if match.group(1) else "png"; response=requests.get(f"https://cdn.discordapp.com/emojis/{match.group(3)}.{ext}",timeout=10); response.raise_for_status(); data=response.content
-    created=await interaction.guild.create_custom_emoji(name=name or match.group(2),image=data,reason=f"Stolen by {interaction.user}"); await interaction.followup.send(f"Added {created}",ephemeral=True)
+    emoji_name=name or match.group(2)
+    if not re.fullmatch(r"[A-Za-z0-9_]{2,32}",emoji_name):return await interaction.response.send_message("The emoji name must be 2–32 letters, numbers, or underscores.",ephemeral=True)
+    emoji_id=int(match.group(3)); animated=bool(match.group(1)); extension="gif" if animated else "png"; url=f"https://cdn.discordapp.com/emojis/{emoji_id}.{extension}?quality=lossless"
+    embed=discord.Embed(title=f":{emoji_name}:",description=f"[Download the original {extension.upper()}]({url})\n\nClick **Steal emoji** to add it to this server.",color=0x5865F2)
+    embed.set_image(url=url); embed.set_footer(text=f"Emoji ID: {emoji_id}")
+    view=StealEmojiView(emoji_id,animated,emoji_name); bot.add_view(view)
+    await interaction.response.send_message(embed=embed,view=view)
 
 @bot.tree.command(description="Post a customizable announcement")
 @app_commands.check(publisher)
