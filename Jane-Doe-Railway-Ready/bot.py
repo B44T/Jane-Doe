@@ -245,6 +245,10 @@ class ActionButtonView(discord.ui.View):
             select=discord.ui.Select(placeholder=(menu.get("placeholder") or "Choose an option")[:150],custom_id=f"actionmenu:{key}:{menu_index}",min_values=1,max_values=1,options=[discord.SelectOption(label=(o.get("label") or "Option")[:100],value=str(i),description=(o.get("description") or None),emoji=component_emoji(o.get("emoji"))) for i,o in enumerate(options)])
             async def selected(interaction,select=select,choices=options):
                 choice=choices[int(select.values[0])]
+                if choice.get("action")=="role":
+                    role=interaction.guild.get_role(int(choice.get("role_id") or 0))
+                    if not role:return await interaction.response.send_message("That role no longer exists.",ephemeral=True)
+                    await interaction.response.defer(ephemeral=True); added=role not in interaction.user.roles; await (interaction.user.add_roles(role,reason="Message menu") if added else interaction.user.remove_roles(role,reason="Message menu")); return await interaction.followup.send(f"{role.mention} {'added' if added else 'removed'}.",ephemeral=True)
                 await interaction.response.send_message(choice.get("response") or "No response has been configured.",ephemeral=choice.get("ephemeral",True))
             select.callback=selected; self.add_item(select)
 

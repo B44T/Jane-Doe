@@ -79,6 +79,15 @@ def message_components(gid,msg):
     for action_row in msg.components:
         for child in getattr(action_row,"children",[]):
             custom_id=getattr(child,"custom_id",None) or ""
+            role_match=re.match(r"roles:(?:select:)?([^:]+)",custom_id)
+            if role_match:
+                cfg=storage.get_setting(gid,f"reaction_panel:{role_match.group(1)}",{})
+                if cfg:
+                    choices=cfg.get("choices") or []
+                    copied={"role_panel":cfg}
+                    if cfg.get("mode")=="select":copied["menus"]=[{"placeholder":cfg.get("placeholder") or "Choose your roles","options":[{"label":c.get("label","Role"),"description":c.get("description",""),"emoji":c.get("emoji",""),"action":"role","role_id":c.get("role_id"),"ephemeral":True} for c in choices]}]
+                    else:copied["buttons"]=[{"label":c.get("label","Role"),"emoji":c.get("emoji",""),"style":"secondary","action":"role","role_id":c.get("role_id"),"ephemeral":True} for c in choices]
+                    return copied
             match=re.match(r"action(?:menu)?:([^:]+):",custom_id)
             if match:
                 key=match.group(1); cfg=storage.get_setting(gid,f"message_components:{key}",{})
@@ -516,7 +525,13 @@ def reaction_panel(gid):
     async def work():
         view=ReactionRoleView(key,d)
         bot.add_view(view); embed,files=make_embed_with_files(d.get("embed")); msg=await channel.send(content=d.get("content") or None,embed=embed,files=files,view=view); return msg.id
-    return jsonify(ok=True,key=key,message_id=str(bot.submit(work()).result(15)))
+    mid=bot.submit(work()).result(15)
+    storage.execute("INSERT OR REPLACE INTO message_component_configs VALUES(?,?,?)",(mid,gid,key))
+    copied={"role_panel":d}
+    if d.get("mode")=="select":copied["menus"]=[{"placeholder":d.get("placeholder") or "Choose your roles","options":[{"label":c.get("label","Role"),"description":c.get("description",""),"emoji":c.get("emoji",""),"action":"role","role_id":c.get("role_id"),"ephemeral":True} for c in choices]}]
+    else:copied["buttons"]=[{"label":c.get("label","Role"),"emoji":c.get("emoji",""),"style":"secondary","action":"role","role_id":c.get("role_id"),"ephemeral":True} for c in choices]
+    storage.set_setting(gid,f"message_components:{key}",copied)
+    return jsonify(ok=True,key=key,message_id=str(mid))
 
 @app.post("/api/guild/<int:gid>/glue")
 @protected
