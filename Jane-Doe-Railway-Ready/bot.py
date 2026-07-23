@@ -54,12 +54,18 @@ def clipped(value,limit=1024):
     value=str(value or "")
     return value if len(value)<=limit else value[:limit-1]+"…"
 
-def announcement_embed(cfg,member=None):
+def announcement_embed(cfg,member=None,member_author=False):
     edata=cfg.get("embed") or {}
     if member:edata={k:variables(v,member) if isinstance(v,str) else v for k,v in edata.items()}
     else:edata=dict(edata)
     if cfg.get("anonymous"):
         edata.pop("author",None); edata.pop("author_icon",None); edata.pop("author_icon_asset",None)
+    elif member and member_author:
+        # Welcome/leave author icons should identify the member involved in the
+        # event, rather than retaining a static URL from the dashboard.
+        edata["author"]=edata.get("author") or member.display_name
+        edata["author_icon"]=str(member.display_avatar.url)
+        edata.pop("author_icon_asset",None)
     return edata
 
 async def refresh_invite_snapshot(guild):
@@ -594,7 +600,7 @@ async def on_member_join(member):
     cfg=storage.get_setting(member.guild.id,"welcome",{})
     channel=member.guild.get_channel(int(cfg.get("channel_id") or 0))
     if cfg.get("enabled") and channel:
-        edata=announcement_embed(cfg,member)
+        edata=announcement_embed(cfg,member,member_author=True)
         content=variables(cfg.get("content", ""),member)
         try:
             embed,files=make_embed_with_files(edata); await channel.send(content=content or None,embed=embed,files=files)
@@ -634,7 +640,7 @@ async def on_invite_delete(invite):
 async def on_member_remove(member):
     cfg=storage.get_setting(member.guild.id,"leave",{}); channel=member.guild.get_channel(int(cfg.get("channel_id") or 0))
     if cfg.get("enabled") and channel:
-        edata=announcement_embed(cfg,member)
+        edata=announcement_embed(cfg,member,member_author=True)
         try:
             embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content", ""),member) or None,embed=embed,files=files)
         except (discord.Forbidden,discord.HTTPException,FileNotFoundError) as error:
