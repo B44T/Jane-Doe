@@ -236,6 +236,59 @@ class ConfessionView(discord.ui.View):
         async def reply_clicked(interaction):await interaction.response.send_modal(ConfessionReplyModal(confession_id))
         submit.callback=submit_clicked; reply.callback=reply_clicked; self.add_item(submit); self.add_item(reply)
 
+class AfkMessageModal(discord.ui.Modal,title="Leave an AFK message"):
+    message=discord.ui.TextInput(label="Message",style=discord.TextStyle.paragraph,max_length=1000,required=True,placeholder="What should they see when they return?")
+    def __init__(self,guild_id,target_id):super().__init__(); self.guild_id=guild_id; self.target_id=target_id
+    async def on_submit(self,interaction):
+        active=storage.rows("SELECT 1 FROM afk_statuses WHERE guild_id=? AND user_id=?",(self.guild_id,self.target_id))
+        if not active:return await interaction.response.send_message("They are already back.",ephemeral=True)
+        storage.execute("INSERT INTO afk_messages(guild_id,target_id,sender_id,message) VALUES(?,?,?,?)",(self.guild_id,self.target_id,interaction.user.id,str(self.message)))
+        await interaction.response.send_message("Your message will be delivered when they return.",ephemeral=True)
+
+class AfkPingView(discord.ui.View):
+    def __init__(self,guild_id,target_id):
+        super().__init__(timeout=None); self.guild_id=guild_id; self.target_id=target_id
+        leave=discord.ui.Button(label="Leave a message",style=discord.ButtonStyle.primary,custom_id=f"afk:message:{guild_id}:{target_id}")
+        watch=discord.ui.Button(label="Tell me when they are back",style=discord.ButtonStyle.secondary,custom_id=f"afk:watch:{guild_id}:{target_id}")
+        async def leave_clicked(interaction):
+            await interaction.response.send_modal(AfkMessageModal(self.guild_id,self.target_id))
+        async def watch_clicked(interaction):
+            if interaction.user.id==self.target_id:return await interaction.response.send_message("That is you—you'll know when you're back!",ephemeral=True)
+            active=storage.rows("SELECT 1 FROM afk_statuses WHERE guild_id=? AND user_id=?",(self.guild_id,self.target_id))
+            if not active:return await interaction.response.send_message("They are already back.",ephemeral=True)
+            storage.execute("INSERT OR IGNORE INTO afk_watchers(guild_id,target_id,watcher_id) VALUES(?,?,?)",(self.guild_id,self.target_id,interaction.user.id))
+            await interaction.response.send_message("I'll let you know when they are back.",ephemeral=True)
+        leave.callback=leave_clicked; watch.callback=watch_clicked; self.add_item(leave); self.add_item(watch)
+
+async def clear_afk(guild,member):
+    active=storage.rows("SELECT * FROM afk_statuses WHERE guild_id=? AND user_id=?",(guild.id,member.id))
+    if not active:return False
+    messages=storage.rows("SELECT * FROM afk_messages WHERE guild_id=? AND target_id=? ORDER BY id",(guild.id,member.id))
+    watchers=storage.rows("SELECT watcher_id FROM afk_watchers WHERE guild_id=? AND target_id=?",(guild.id,member.id))
+    storage.execute("DELETE FROM afk_statuses WHERE guild_id=? AND user_id=?",(guild.id,member.id))
+    storage.execute("DELETE FROM afk_messages WHERE guild_id=? AND target_id=?",(guild.id,member.id))
+    storage.execute("DELETE FROM afk_watchers WHERE guild_id=? AND target_id=?",(guild.id,member.id))
+    if messages:
+        lines=[]
+        for item in messages:
+            sender=await resolve_member(guild,item["sender_id"]); name=sender.display_name if sender else f"User {item['sender_id']}"
+            lines.append(f"**{name}:** {item['message']}")
+        heading=f"You received {len(messages)} message{'s' if len(messages)!=1 else ''} while AFK in **{guild.name}**:"
+        chunks=[]; current=heading
+        for line in lines:
+            if len(current)+len(line)+2>1900:chunks.append(current); current=line
+            else:current+=f"\n\n{line}"
+        chunks.append(current)
+        try:
+            for chunk in chunks:await member.send(chunk,allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:pass
+    for item in watchers:
+        watcher=await resolve_member(guild,item["watcher_id"])
+        if watcher:
+            try:await watcher.send(f"{member.display_name} is back in **{guild.name}**.")
+            except discord.HTTPException:pass
+    return True
+
 async def get_confession_thread(guild,row,cfg):
     thread_id=int(row.get("thread_id") or row.get("message_id") or 0)
     thread=guild.get_thread(thread_id) if thread_id else None
@@ -371,6 +424,9 @@ async def on_ready():
         for row in storage.rows("SELECT id,message_id FROM confessions WHERE guild_id=? AND message_id IS NOT NULL",(guild.id,)):
             try:bot.add_view(ConfessionView(row["id"],confession_cfg),message_id=row["message_id"]); restored+=1
             except Exception as e:failed+=1; print(f"Could not restore confession:{row['id']}: {type(e).__name__}: {e}")
+        for row in storage.rows("SELECT user_id FROM afk_statuses WHERE guild_id=?",(guild.id,)):
+            try:restore(AfkPingView(guild.id,row["user_id"]),f"afk:{row['user_id']}")
+            except Exception as e:failed+=1; print(f"Could not restore afk:{row['user_id']}: {type(e).__name__}: {e}")
     print(f"Restored {restored} persistent component handler(s)"+(f"; {failed} invalid configuration(s) skipped" if failed else ""))
     if not birthday_check.is_running(): birthday_check.start()
     if not giveaway_check.is_running(): giveaway_check.start()
@@ -439,6 +495,16 @@ async def on_interaction(interaction):
         if prefix=="confession" and len(parts)>=2:
             if parts[1]=="submit":return await interaction.response.send_modal(ConfessionSubmitModal(interaction.channel_id))
             if parts[1]=="reply" and len(parts)>=3:return await interaction.response.send_modal(ConfessionReplyModal(int(parts[2])))
+        if prefix=="afk" and len(parts)>=4:
+            action,guild_id,target_id=parts[1],int(parts[2]),int(parts[3])
+            if guild_id!=interaction.guild_id:return await interaction.response.send_message("This AFK button belongs to another server.",ephemeral=True)
+            active=storage.rows("SELECT 1 FROM afk_statuses WHERE guild_id=? AND user_id=?",(guild_id,target_id))
+            if not active:return await interaction.response.send_message("They are already back.",ephemeral=True)
+            if action=="message":return await interaction.response.send_modal(AfkMessageModal(guild_id,target_id))
+            if action=="watch":
+                if interaction.user.id==target_id:return await interaction.response.send_message("That is you—you'll know when you're back!",ephemeral=True)
+                storage.execute("INSERT OR IGNORE INTO afk_watchers(guild_id,target_id,watcher_id) VALUES(?,?,?)",(guild_id,target_id,interaction.user.id))
+                return await interaction.response.send_message("I'll let you know when they are back.",ephemeral=True)
         await interaction.response.send_message(f"This button uses an unsupported or deleted configuration (`{clipped(custom_id,80)}`). Republish that specific panel; this is not a bot-permissions error.",ephemeral=True)
     except Exception as e:
         print(f"Persistent component fallback failed for {custom_id}: {type(e).__name__}: {e}")
@@ -527,6 +593,18 @@ async def on_message(message):
         return
     if message.author.bot:return
     if message.guild:
+        await clear_afk(message.guild,message.author)
+        seen=set()
+        for member in message.mentions:
+            if member.id in seen or member.id==message.author.id:continue
+            seen.add(member.id)
+            active=storage.rows("SELECT message,set_at FROM afk_statuses WHERE guild_id=? AND user_id=?",(message.guild.id,member.id))
+            if not active:continue
+            row=active[0]
+            try:set_at=datetime.fromisoformat(row["set_at"]); timestamp=int(set_at.timestamp())
+            except (TypeError,ValueError):timestamp=int(datetime.now(timezone.utc).timestamp())
+            view=AfkPingView(message.guild.id,member.id); bot.add_view(view)
+            await message.reply(f"**{member.display_name}** ‘’(๑－‸ ҂) is AFK: {row['message']} - <t:{timestamp}:R>",view=view,allowed_mentions=discord.AllowedMentions.none())
         cfg=storage.get_setting(message.guild.id,"confessions",{})
         if cfg.get("enabled") and message.channel.id==int(cfg.get("channel_id") or 0):
             payloads=[]
@@ -576,6 +654,29 @@ async def on_raw_message_delete(payload):
     if not message or not guild or message.author.bot:return
     attachments="\n".join(a.filename for a in message.attachments) or "None"
     await action_log(guild,"message_delete",message.author,f"Message deleted in #{message.channel.name}",message.content or "No text content",[("Attachments",attachments,False)],0xED4245)
+
+afk_group=app_commands.Group(name="afk",description="Set or manage AFK statuses")
+afk_mod_group=app_commands.Group(name="mod",description="Moderator AFK controls",parent=afk_group)
+
+@afk_group.command(name="set",description="Set your AFK status")
+@app_commands.describe(message="The reason shown when somebody pings you")
+async def afk_set(interaction:discord.Interaction,message:app_commands.Range[str,1,500]):
+    now=datetime.now(timezone.utc).isoformat()
+    storage.execute("INSERT INTO afk_statuses(guild_id,user_id,message,set_at) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET message=excluded.message,set_at=excluded.set_at",(interaction.guild_id,interaction.user.id,message,now))
+    bot.add_view(AfkPingView(interaction.guild_id,interaction.user.id))
+    await interaction.response.send_message(f"You're now AFK: **{message}**",ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+
+@afk_mod_group.command(name="clearall",description="Clear every AFK status in this server")
+@app_commands.check(moderator)
+@app_commands.default_permissions(manage_messages=True)
+async def afk_clearall(interaction:discord.Interaction):
+    count=storage.rows("SELECT COUNT(*) AS total FROM afk_statuses WHERE guild_id=?",(interaction.guild_id,))[0]["total"]
+    storage.execute("DELETE FROM afk_statuses WHERE guild_id=?",(interaction.guild_id,))
+    storage.execute("DELETE FROM afk_messages WHERE guild_id=?",(interaction.guild_id,))
+    storage.execute("DELETE FROM afk_watchers WHERE guild_id=?",(interaction.guild_id,))
+    await interaction.response.send_message(f"Cleared {count} AFK status{'es' if count!=1 else ''} and their pending notifications.",ephemeral=True)
+
+bot.tree.add_command(afk_group)
 
 @bot.tree.command(description="Post an anonymous confession")
 async def confess(interaction:discord.Interaction,message:app_commands.Range[str,1,1800]):

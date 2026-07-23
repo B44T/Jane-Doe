@@ -38,6 +38,8 @@ Enable **Server Members Intent** and **Message Content Intent**. Keep the bot ro
 
 ## Commands
 
+- `/afk set message` — marks you AFK; pings show your reason and offer message/return-notification buttons
+- `/afk mod clearall` — clears all AFK records and pending notifications (moderators only)
 - `/birthday month day [year]`
 - `/warn member reason`
 - `/timeout member minutes [reason]`

@@ -17,11 +17,15 @@ app.config["MAX_CONTENT_LENGTH"]=10*1024*1024
 # newly added controls do not disappear behind a stale cached bundle.
 app.config["SEND_FILE_MAX_AGE_DEFAULT"]=0
 
+def persistent_storage_ready():
+    if not os.getenv("RAILWAY_ENVIRONMENT"):return True
+    configured=(os.getenv("DATA_DIR") or os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or "").strip()
+    return bool(configured and os.path.abspath(configured)=="/data")
+
 @app.get("/health")
 def health():
     ready=bot.is_ready()
-    volume=os.getenv("RAILWAY_VOLUME_MOUNT_PATH","").strip()
-    return jsonify(status="ok",discord_ready=ready,persistent_storage=not bool(os.getenv("RAILWAY_ENVIRONMENT")) or bool(volume),data_dir=os.path.dirname(config.DB_PATH)),200
+    return jsonify(status="ok",discord_ready=ready,persistent_storage=persistent_storage_ready(),data_dir=os.path.dirname(config.DB_PATH)),200
 
 def protected(fn):
     @wraps(fn)
@@ -48,7 +52,7 @@ async def register_view(view):bot.add_view(view); return True
 @app.get("/")
 @protected
 def home():
-    persistent_storage=not bool(os.getenv("RAILWAY_ENVIRONMENT")) or bool(os.getenv("RAILWAY_VOLUME_MOUNT_PATH",""))
+    persistent_storage=persistent_storage_ready()
     return render_template("dashboard.html",guilds=guilds(),application_id=config.APPLICATION_ID,persistent_storage=persistent_storage)
 
 @app.get("/api/guild/<int:gid>/context")

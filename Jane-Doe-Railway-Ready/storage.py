@@ -29,6 +29,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS bot_messages(message_id INTEGER PRIMARY KEY, guild_id INTEGER, channel_id INTEGER, content TEXT, embed_json TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS message_component_configs(message_id INTEGER PRIMARY KEY, guild_id INTEGER, component_key TEXT);
         CREATE TABLE IF NOT EXISTS archives(id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER, name TEXT, payload_json TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS afk_statuses(guild_id INTEGER, user_id INTEGER, message TEXT, set_at TEXT, PRIMARY KEY(guild_id,user_id));
+        CREATE TABLE IF NOT EXISTS afk_messages(id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER, target_id INTEGER, sender_id INTEGER, message TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS afk_watchers(guild_id INTEGER, target_id INTEGER, watcher_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(guild_id,target_id,watcher_id));
         """)
         for sql in ("ALTER TABLE birthdays ADD COLUMN announcement_channel_id INTEGER","ALTER TABLE birthdays ADD COLUMN announcement_message TEXT DEFAULT ''","ALTER TABLE confessions ADD COLUMN channel_id INTEGER","ALTER TABLE confessions ADD COLUMN message_id INTEGER","ALTER TABLE confessions ADD COLUMN thread_id INTEGER"):
             try:db.execute(sql)
