@@ -803,7 +803,7 @@ async def stealemoji(interaction:discord.Interaction,emoji:str,name:str|None=Non
     emoji_name=name or match.group(2)
     if not re.fullmatch(r"[A-Za-z0-9_]{2,32}",emoji_name):return await interaction.response.send_message("The emoji name must be 2–32 letters, numbers, or underscores.",ephemeral=True)
     emoji_id=int(match.group(3)); animated=bool(match.group(1)); extension="gif" if animated else "png"; url=f"https://cdn.discordapp.com/emojis/{emoji_id}.{extension}?quality=lossless"
-    embed=discord.Embed(title=f":{emoji_name}:",description=f"[Download the original {extension.upper()}]({url})\n\nClick **Steal emoji** to add it to this server.",color=0x5865F2)
+    embed=discord.Embed(title=f":{emoji_name}:",color=0x5865F2)
     embed.set_image(url=url); embed.set_footer(text=f"Emoji ID: {emoji_id}")
     view=StealEmojiView(emoji_id,animated,emoji_name); bot.add_view(view)
     await interaction.response.send_message(embed=embed,view=view)

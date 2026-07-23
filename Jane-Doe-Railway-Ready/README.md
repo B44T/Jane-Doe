@@ -46,7 +46,7 @@ Enable **Server Members Intent** and **Message Content Intent**. Keep the bot ro
 - `/kick member [reason]`
 - `/ban member [reason]`
 - `/purge amount`
-- `/stealemoji emoji [name]` — previews the original image with a download link and an authorized Steal emoji button
+- `/stealemoji emoji [name]` — previews the original image with an authorized Steal emoji button
 - `/poll question option_1 option_2 [option_3] [option_4]`
 - `/event name starts_in_minutes duration_minutes location [description]`
 - `/confess message` — anonymously posts to the configured confession channel
