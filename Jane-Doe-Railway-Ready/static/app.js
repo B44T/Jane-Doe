@@ -275,19 +275,20 @@ $('#announcement-cards').addEventListener('click',async event=>{
 // the whole panel (including its role controls and uploaded assets), then the
 // Publish action posts the snapshots consecutively in one operation.
 let rolePanelQueue=[];
+function rolePanelColor(panel){return panel?.embed?.color||'#5865f2'}
 function currentRolePanel(){
- return{channel_id:$('#rr-channel').value,mode:$('#rr-mode').value,placeholder:$('#rr-placeholder').value,content:$('#rr-content').value,embed:{title:$('#rr-title').value,description:$('#rr-description').value,color:$('#rr-color').value,image:$('#rr-image').value,thumbnail:$('#rr-thumb').value,image_asset:savedAssets.roleImage||'',thumbnail_asset:savedAssets.roleThumb||'',footer:$('#rr-footer').value,...authorPayload('rr','roleAuthor')},choices:roleChoices()};
+ return{channel_id:$('#rr-channel').value,mode:$('#rr-mode').value,placeholder:$('#rr-placeholder').value,content:$('#rr-content').value,embed:{title:$('#rr-title').value,description:$('#rr-description').value,color:rolePanelColor({embed:{color:$('#rr-color').value}}),image:$('#rr-image').value,thumbnail:$('#rr-thumb').value,image_asset:savedAssets.roleImage||'',thumbnail_asset:savedAssets.roleThumb||'',footer:$('#rr-footer').value,...authorPayload('rr','roleAuthor')},choices:roleChoices()};
 }
 function rolePanelPreview(panel,label){
  const choices=panel.choices||[],selectMode=panel.mode==='select',buttons=selectMode?[]:choices.map(c=>({label:c.label,emoji:c.emoji})),menu=selectMode?`<div class="discord-select-preview">${renderDiscordText(panel.placeholder||'Choose your roles')}<span>⌄</span></div><div class="select-preview-options">${choices.map(c=>`<div>${renderDiscordText(c.emoji)} <b>${escapeHtml(c.label)}</b><small>${escapeHtml(c.description)}</small></div>`).join('')}</div>`:'';
- return`<p class="eyebrow${label?' preview-gap':''}">${escapeHtml(label||'DISCORD PREVIEW')}</p>${discordPreview(panel.content,panel.embed?.title,panel.embed?.description,buttons,{color:panel.embed?.color,image:panel.embed?.image_asset?`/api/guild/${gid()}/asset/${encodeURIComponent(panel.embed.image_asset)}`:panel.embed?.image,thumbnail:panel.embed?.thumbnail_asset?`/api/guild/${gid()}/asset/${encodeURIComponent(panel.embed.thumbnail_asset)}`:panel.embed?.thumbnail,footer:panel.embed?.footer,author:panel.embed?.author,author_icon:panel.embed?.author_icon,components:menu})}`;
+ return`<p class="eyebrow${label?' preview-gap':''}">${escapeHtml(label||'DISCORD PREVIEW')}</p>${discordPreview(panel.content,panel.embed?.title,panel.embed?.description,buttons,{color:rolePanelColor(panel),image:panel.embed?.image_asset?`/api/guild/${gid()}/asset/${encodeURIComponent(panel.embed.image_asset)}`:panel.embed?.image,thumbnail:panel.embed?.thumbnail_asset?`/api/guild/${gid()}/asset/${encodeURIComponent(panel.embed.thumbnail_asset)}`:panel.embed?.thumbnail,footer:panel.embed?.footer,author:panel.embed?.author,author_icon:panel.embed?.author_icon,components:menu})}`;
 }
 function renderRolePanelQueue(){
- const list=$('#role-panel-queue');if(list)list.innerHTML=rolePanelQueue.map((p,i)=>`<div class="builder-row"><button type="button" class="remove-option" onclick="removeQueuedRolePanel(${i})">×</button><b>Queued panel ${i+1}</b><small>${escapeHtml(p.embed?.title||'Untitled role panel')} · ${(p.choices||[]).length} choice(s)</small></div>`).join('');
+ const list=$('#role-panel-queue');if(list)list.innerHTML=rolePanelQueue.map((p,i)=>`<div class="builder-row queued-role-panel"><button type="button" class="remove-option" onclick="removeQueuedRolePanel(${i})">×</button><div><b>Queued panel ${i+1}</b><small>${escapeHtml(p.embed?.title||'Untitled role panel')} · ${(p.choices||[]).length} choice(s)</small></div><label>Color<input class="queued-role-color" type="color" data-index="${i}" value="${escapeHtml(rolePanelColor(p))}"></label></div>`).join('');
  const preview=$('#role-preview');if(preview)preview.innerHTML=rolePanelQueue.map((p,i)=>rolePanelPreview(p,`QUEUED PANEL ${i+1}`)).join('')+rolePanelPreview(currentRolePanel(),rolePanelQueue.length?`CURRENT PANEL ${rolePanelQueue.length+1}`:'DISCORD PREVIEW');
 }
 function clearCurrentRolePanel(){
- $('#rr-content').value='';$('#rr-title').value='';$('#rr-description').value='';$('#rr-footer').value='';$('#rr-image').value='';$('#rr-thumb').value='';$('#role-options').innerHTML='';
+ $('#rr-content').value='';$('#rr-title').value='';$('#rr-description').value='';$('#rr-color').value='#5865f2';$('#rr-footer').value='';$('#rr-image').value='';$('#rr-thumb').value='';$('#role-options').innerHTML='';
  savedAssets.roleImage='';savedAssets.roleThumb='';savedAssets.roleAuthor='';delete savedAssetPreviews.roleImage;delete savedAssetPreviews.roleThumb;delete savedAssetPreviews.roleAuthor;
 }
 function queueRolePanel(){
@@ -321,4 +322,9 @@ openArchive=function(i){
  for(const [id,key] of [['rr-title','title'],['rr-description','description'],['rr-color','color'],['rr-image','image'],['rr-thumb','thumbnail'],['rr-footer','footer'],['rr-author','author'],['rr-author-icon','author_icon']])if($('#'+id))$('#'+id).value=panel.embed?.[key]||($('#'+id).type==='color'?'#5865f2':'');
  savedAssets.roleImage=panel.embed?.image_asset||'';savedAssets.roleThumb=panel.embed?.thumbnail_asset||'';savedAssets.roleAuthor=panel.embed?.author_icon_asset||'';$('#role-options').innerHTML='';(panel.choices||[]).forEach(addRoleOption);openPage('roles');renderRolePanelQueue();toast('Archived role panels opened');
 };
-$('#roles')?.addEventListener('input',()=>{if(rolePanelQueue.length)renderRolePanelQueue()});
+$('#roles')?.addEventListener('input',event=>{
+ if(event.target?.classList?.contains('queued-role-color')){
+  const panel=rolePanelQueue[Number(event.target.dataset.index)];if(panel){panel.embed=panel.embed||{};panel.embed.color=event.target.value}
+ }
+ if(rolePanelQueue.length)renderRolePanelQueue()
+});
