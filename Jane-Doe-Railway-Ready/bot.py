@@ -62,6 +62,31 @@ def announcement_embed(cfg,member=None):
         edata.pop("author",None); edata.pop("author_icon",None); edata.pop("author_icon_asset",None)
     return edata
 
+async def refresh_invite_snapshot(guild):
+    try:
+        invites=await guild.invites()
+        storage.set_setting(guild.id,"invite_snapshot",{invite.code:invite.uses for invite in invites})
+        return invites
+    except (discord.Forbidden,discord.HTTPException):
+        return None
+
+async def invite_attribution(guild):
+    before=storage.get_setting(guild.id,"invite_snapshot",{})
+    try:
+        current=await guild.invites()
+    except discord.Forbidden:
+        return "Invite tracking unavailable (grant Manage Server)","unknown","0"
+    except discord.HTTPException:
+        return "Unknown inviter","unknown","0"
+    used=next((invite for invite in current if invite.uses>int(before.get(invite.code,0))),None)
+    storage.set_setting(guild.id,"invite_snapshot",{invite.code:invite.uses for invite in current})
+    if not used:
+        return "Unknown inviter","unknown","0"
+    inviter=used.inviter.mention if used.inviter else "Unknown inviter"
+    inviter_id=getattr(used.inviter,"id",None)
+    total=sum(invite.uses for invite in current if inviter_id and getattr(invite.inviter,"id",None)==inviter_id)
+    return inviter,used.code,str(total or used.uses)
+
 async def action_log(guild,event,member,title,description="",fields=None,color=0xB8343F):
     cfg=storage.get_setting(guild.id,"action_logs",{})
     if not cfg.get("enabled") or not cfg.get(event):return
@@ -431,6 +456,7 @@ async def on_ready():
         try:bot.add_view(view); restored+=1
         except Exception as e:failed+=1; print(f"Could not restore {label}: {type(e).__name__}: {e}")
     for guild in bot.guilds:
+        await refresh_invite_snapshot(guild)
         for key in storage.rows("SELECT key,value FROM settings WHERE guild_id=? AND key LIKE 'ticket_panel:%'",(guild.id,)):
             try:cfg=json.loads(key['value']); panel_key=key['key'].split(':',1)[1]; restore(TicketPanel(panel_key,cfg),key['key'])
             except Exception as e:failed+=1; print(f"Could not load {key['key']}: {type(e).__name__}: {e}")
@@ -552,16 +578,16 @@ async def on_member_join(member):
     if cfg.get("enabled") and channel:
         edata=announcement_embed(cfg,member)
         content=variables(cfg.get("content", ""),member)
-        if cfg.get("invite_tracking"):
-            inviter="Unknown inviter"; code="unknown"; uses="0"
-            try:
-                before=storage.get_setting(member.guild.id,"invite_snapshot",{}); current=await member.guild.invites(); used=next((i for i in current if i.uses>int(before.get(i.code,0))),None)
-                if used:inviter=used.inviter.mention if used.inviter else "Unknown inviter"; code=used.code; uses=str(used.uses)
-                storage.set_setting(member.guild.id,"invite_snapshot",{i.code:i.uses for i in current})
-            except discord.Forbidden:inviter="Invite tracking unavailable (grant Manage Server)"
-            tracked=(cfg.get("invite_message") or "Invited by {inviter} using `{invite_code}` ({invite_uses} uses)").replace("{inviter}",inviter).replace("{invite_code}",code).replace("{invite_uses}",uses)
-            content=(content+"\n"+tracked).strip()
         embed,files=make_embed_with_files(edata); await channel.send(content=content or None,embed=embed,files=files)
+    if cfg.get("invite_tracking"):
+        tracking_channel=member.guild.get_channel(int(cfg.get("tracking_channel_id") or 0))
+        if tracking_channel:
+            inviter,code,uses=await invite_attribution(member.guild)
+            custom=variables(cfg.get("tracking_content",""),member)
+            template=cfg.get("invite_message") or "(this user has been invited by {inviter}, who now has {inviter_invites} invites.)"
+            tracked=(template.replace("{inviter}",inviter).replace("{invite_code}",code)
+                     .replace("{invite_uses}",uses).replace("{inviter_invites}",uses))
+            await tracking_channel.send(content=(custom+"\n"+tracked).strip())
     role=member.guild.get_role(int(cfg.get("role_id") or 0))
     if role:
         try: await member.add_roles(role,reason="Welcome role")
@@ -570,6 +596,14 @@ async def on_member_join(member):
     creation=f"created **{age_text(account_age)} ago**"
     if recent:creation=f"⚠️ **NEW ACCOUNT** — {creation} ⚠️"
     await action_log(member.guild,"member_join",member,"Member joined",f"{member.mention} — **{ordinal(member.guild.member_count or 1)} to join**\n{creation}",[("Account created",discord.utils.format_dt(member.created_at,"F"),False)],0x57F287 if not recent else 0xED4245)
+
+@bot.event
+async def on_invite_create(invite):
+    if invite.guild:await refresh_invite_snapshot(invite.guild)
+
+@bot.event
+async def on_invite_delete(invite):
+    if invite.guild:await refresh_invite_snapshot(invite.guild)
 
 @bot.event
 async def on_member_remove(member):
