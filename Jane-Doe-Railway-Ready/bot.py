@@ -383,19 +383,20 @@ async def on_ready():
     # These commands are core publishing tools requested for both Discord and
     # the dashboard. Re-sync on every ready event so option changes are applied
     # after startup as well as after a Discord gateway outage/reconnect.
-    disabled.difference_update({"announce","poll","event"})
+    disabled.difference_update({"announce","poll","event","afk"})
     storage.set_setting(0,"disabled_commands",sorted(disabled))
     for command_name in disabled:bot.tree.remove_command(command_name)
     # Guild commands update immediately. Global command changes can remain
     # cached for an hour and Discord reports those stale definitions as
     # "outdated". Use the configured single-server scope when available.
-    if config.GUILD_ID:
-        target=discord.Object(id=config.GUILD_ID)
+    immediate_guild_id=config.GUILD_ID or (bot.guilds[0].id if len(bot.guilds)==1 else 0)
+    if immediate_guild_id:
+        target=discord.Object(id=immediate_guild_id)
         bot.tree.copy_global_to(guild=target)
         synced=await bot.tree.sync(guild=target)
     else:
         synced=await bot.tree.sync()
-    print(f"Synced {len(synced)} {'server' if config.GUILD_ID else 'global'} command(s)")
+    print(f"Synced {len(synced)} {'server' if immediate_guild_id else 'global'} command(s)"+(f" to {immediate_guild_id}" if immediate_guild_id else ""))
     bot.add_view(TicketControls()); restored=1; failed=0
     def restore(view,label):
         nonlocal restored,failed
