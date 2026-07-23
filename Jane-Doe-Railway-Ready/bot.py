@@ -394,6 +394,13 @@ async def on_ready():
         target=discord.Object(id=immediate_guild_id)
         bot.tree.copy_global_to(guild=target)
         synced=await bot.tree.sync(guild=target)
+        # Commands used to be global, which makes Discord show a stale global
+        # copy beside the immediate guild copy. Remove only the remote global
+        # registrations while retaining the local definitions used above.
+        remote_globals=await bot.tree.fetch_commands()
+        if remote_globals:
+            await bot.http.bulk_upsert_global_commands(bot.application_id,[])
+            print(f"Removed {len(remote_globals)} stale global command(s)")
     else:
         synced=await bot.tree.sync()
     print(f"Synced {len(synced)} {'server' if immediate_guild_id else 'global'} command(s)"+(f" to {immediate_guild_id}" if immediate_guild_id else ""))

@@ -349,9 +349,10 @@ def command_delete(gid,name):
     if not command:return jsonify(error="That command is already deleted."),404
     disabled=set(storage.get_setting(0,"disabled_commands",[])); disabled.add(name); storage.set_setting(0,"disabled_commands",sorted(disabled)); bot.tree.remove_command(name)
     async def work():
-        if config.GUILD_ID:
-            target=discord.Object(id=config.GUILD_ID); bot.tree.remove_command(name,guild=target); await bot.tree.sync(guild=target)
-        else:await bot.tree.sync()
+        # Dashboard command changes are server-specific. Sync the selected
+        # guild even when GUILD_ID is omitted, matching startup behavior and
+        # avoiding a second global copy of every command.
+        target=discord.Object(id=gid); bot.tree.remove_command(name,guild=target); await bot.tree.sync(guild=target)
     try:bot.submit(work()).result(30)
     except discord.HTTPException as e:return jsonify(error=e.text or "Discord could not update the command list."),400
     return jsonify(ok=True)
