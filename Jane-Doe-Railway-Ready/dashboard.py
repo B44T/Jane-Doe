@@ -225,6 +225,18 @@ def emoji_editor_upload(gid):
     except discord.HTTPException as e:return jsonify(error=e.text or "Discord rejected the emoji."),400
     return jsonify(ok=True,emoji=emoji_json(e),animated=animated,size=actual_size)
 
+@app.post("/api/guild/<int:gid>/emoji/editor-render")
+@protected
+def emoji_editor_render(gid):
+    f=request.files.get("file")
+    if not f or not f.filename:return jsonify(error="Choose an emoji image."),400
+    settings={k:request.form.get(k,"") for k in ("color","blend","opacity","mask","brightness","contrast","saturation","fit")}
+    try:data,animated,actual_size=edited_emoji(f.read(),request.form.get("size",128),settings)
+    except (ValueError,OSError) as e:return jsonify(error=str(e)),400
+    ext="gif" if animated else "png"
+    name=re.sub(r"[^A-Za-z0-9_]","_",request.form.get("name","edited_emoji").strip())[:32] or "edited_emoji"
+    return Response(data,content_type=f"image/{ext}",headers={"Content-Disposition":f'attachment; filename="{name}.{ext}"',"X-Emoji-Animated":str(int(animated)),"X-Emoji-Size":str(actual_size)})
+
 @app.post("/api/guild/<int:gid>/emoji/<int:emoji_id>/rename")
 @protected
 def emoji_rename(gid,emoji_id):
