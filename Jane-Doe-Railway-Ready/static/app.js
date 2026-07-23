@@ -92,7 +92,8 @@ let botEmbedCache=[],botEmbedLoading=false,botEmbedLoadedGuild='';function rende
 async function loadBotEmbeds(rescan=false){const box=$('#bot-embed-list'),button=$('#bot-embeds-refresh');if(!box||botEmbedLoading)return;botEmbedLoading=true;button.disabled=true;let progress=1;button.textContent=rescan?'Scanning 1%':'Loading index';const timer=rescan?setInterval(()=>{if(progress<95){progress++;button.textContent=`Scanning ${progress}%`}},70):null;try{const x=await api(`/api/guild/${gid()}/bot-embeds${rescan?'?rescan=1':''}`);botEmbedCache=x.messages||[];botEmbedLoadedGuild=gid();renderBotEmbedCache();button.textContent=rescan?'Scanning 100%':'Index loaded';await wait(250)}catch(e){box.innerHTML=`<p class="alert">${escapeHtml(e.message)}</p>`;button.textContent='Load failed'}finally{if(timer)clearInterval(timer);botEmbedLoading=false;button.disabled=false;setTimeout(()=>button.textContent='Refresh bot embeds',400)}}
 async function editBotEmbed(index){const m=botEmbedCache[index];if(!m)return;$('#embed-channel').value=m.channel_id;$('#edit-message-id').value=m.message_id;openPage('embeds');await loadEmbed()}
 async function deleteBotEmbed(index){const m=botEmbedCache[index];if(!m||!await confirmAction(`Delete this bot message from #${m.channel_name}? This cannot be undone.`,'Delete message?'))return;try{await api(`/api/guild/${gid()}/message`,'DELETE',{channel_id:m.channel_id,message_id:m.message_id});botEmbedCache.splice(index,1);renderBotEmbedCache();toast('Message deleted')}catch(e){toast(e.message)}}
-async function uploadServerEmoji(){const file=$('#emoji-upload-file').files[0],name=$('#emoji-upload-name').value.trim();if(!file)return toast('Choose an emoji image');const form=new FormData();form.append('file',file);form.append('name',name);form.append('size',$('#emoji-upload-size').value);try{const r=await fetch(`/api/guild/${gid()}/emoji/upload`,{method:'POST',body:form}),x=await r.json();if(!r.ok)throw Error(x.error||'Upload failed');$('#emoji-upload-file').value='';toast(`:${x.emoji.name}: uploaded at ${x.size} × ${x.size}`);await refreshEmojis()}catch(e){toast(e.message)}}
+async function uploadEmojiFile(file,name,size){const form=new FormData();form.append('file',file);form.append('name',name);form.append('size',size);const r=await fetch(`/api/guild/${gid()}/emoji/upload`,{method:'POST',body:form}),x=await r.json();if(!r.ok)throw Error(x.error||'Upload failed');return x}
+async function uploadServerEmoji(){const file=$('#emoji-upload-file').files[0],name=$('#emoji-upload-name').value.trim();if(!file)return toast('Choose an emoji image');try{const x=await uploadEmojiFile(file,name,$('#emoji-upload-size').value);$('#emoji-upload-file').value='';toast(`:${x.emoji.name}: uploaded at ${x.size} x ${x.size}`);await refreshEmojis()}catch(e){toast(e.message)}}
 async function renameServerEmoji(id,name){try{await api(`/api/guild/${gid()}/emoji/${id}/rename`,'POST',{name});toast('Emoji renamed');await refreshEmojis()}catch(e){toast(e.message)}}
 async function deleteServerEmoji(id,name){if(!await confirmAction(`Delete :${name}: from this Discord server? This cannot be undone.`,'Delete emoji?'))return;try{await api(`/api/guild/${gid()}/emoji/${id}`,'DELETE');toast(`:${name}: deleted`);await refreshEmojis()}catch(e){toast(e.message)}}
 async function loadCommands(){const box=$('#command-list');if(!box)return;box.innerHTML='<p class="muted">Loading slash commands…</p>';try{const x=await api(`/api/guild/${gid()}/commands`);box.innerHTML=(x.commands||[]).map(c=>`<article class="command-card"><div><h3>/${escapeHtml(c.name)}</h3><p>${escapeHtml(c.description)}</p><small>Mentioned in: ${(c.sections||[]).map(s=>`<button type="button" class="command-section-link" data-page="${escapeHtml(s.page)}">#${escapeHtml(s.label)}</button>`).join(', ')}</small></div><button type="button" class="danger-action" data-command="${escapeHtml(c.name)}">Delete</button></article>`).join('')||'<p class="muted">No slash commands are currently enabled.</p>';box.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>openPage(b.dataset.page));box.querySelectorAll('[data-command]').forEach(b=>b.onclick=()=>deleteCommand(b.dataset.command))}catch(e){box.innerHTML=`<p class="alert">${escapeHtml(e.message)}</p>`}}
@@ -146,7 +147,7 @@ function moveImageCrop(e){if(!imageEdit.action||!imageEdit.start)return;const b=
 function openImageEditor(input,file){if(file.type==='image/gif'){input.dataset.edited='1';input.dispatchEvent(new Event('change',{bubbles:true}));return}const img=new Image(),url=URL.createObjectURL(file);img.onload=()=>{imageEdit={input,img,url,rect:null,action:null,start:null};$('#image-editor-source').src=url;$('#image-editor-modal').hidden=false;requestAnimationFrame(()=>setImageCropPreset(input.id.includes('thumb')||input.id.includes('author')?'square':'banner'))};img.src=url}
 function closeImageEditor(){if(imageEdit.url)URL.revokeObjectURL(imageEdit.url);$('#image-editor-modal').hidden=true;imageEdit={input:null,img:null,url:'',rect:null,action:null,start:null}}
 function applyImageEdit(){const input=imageEdit.input,r=imageEdit.rect,b=imageDisplayBounds();if(!input||!r)return;const ratio=r.w/r.h,w=Math.max(1,Math.round(Math.min(1600,imageEdit.img.naturalWidth))),h=Math.max(1,Math.round(w/ratio)),canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const g=canvas.getContext('2d');if($('#image-editor-mode').value==='fit'){g.fillStyle=$('#image-editor-background').value;g.fillRect(0,0,w,h);const scale=Math.min(w/imageEdit.img.naturalWidth,h/imageEdit.img.naturalHeight),dw=imageEdit.img.naturalWidth*scale,dh=imageEdit.img.naturalHeight*scale;g.drawImage(imageEdit.img,(w-dw)/2,(h-dh)/2,dw,dh)}else{const sx=(r.x-b.x)/b.scale,sy=(r.y-b.y)/b.scale,sw=r.w/b.scale,sh=r.h/b.scale;g.drawImage(imageEdit.img,sx,sy,sw,sh,0,0,w,h)}canvas.toBlob(blob=>{if(!blob)return toast('Could not create the edited image');const dt=new DataTransfer();dt.items.add(new File([blob],(input.files[0]?.name||'image').replace(/\.[^.]+$/,'.png'),{type:'image/png'}));input.dataset.edited='1';input.files=dt.files;closeImageEditor();input.dispatchEvent(new Event('change',{bubbles:true}))},'image/png',.92)}
-document.addEventListener('change',e=>{const input=e.target;if(input.matches?.('input[type="file"][accept*="image"]')&&input.files[0]&&!input.dataset.edited){e.stopImmediatePropagation();openImageEditor(input,input.files[0])}else if(input.dataset?.edited)delete input.dataset.edited},true);buildImageEditor();
+document.addEventListener('change',e=>{const input=e.target;if(input.matches?.('input[type="file"][accept*="image"]')&&input.files[0]&&!input.dataset.edited&&!input.dataset.noAutoCrop){e.stopImmediatePropagation();openImageEditor(input,input.files[0])}else if(input.dataset?.edited)delete input.dataset.edited},true);buildImageEditor();
 
 // Import an existing Discord message into every editor that publishes message
 // or embed content. A full message link supplies its source channel; a plain ID
@@ -328,3 +329,54 @@ $('#roles')?.addEventListener('input',event=>{
  }
  if(rolePanelQueue.length)renderRolePanelQueue()
 });
+
+let emojiEditor={file:null,url:'',img:null,ready:false,animated:false};
+function emojiEditorName(){
+ const typed=$('#emoji-editor-name')?.value.trim(),base=emojiEditor.file?.name?.replace(/\.[^.]+$/,'')||'edited_emoji';
+ return (typed||base).replace(/[^A-Za-z0-9_]/g,'_').slice(0,32)
+}
+function roundedRectPath(ctx,x,y,w,h,r){
+ r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()
+}
+function emojiEditorEdited(){
+ return ['emoji-editor-opacity','emoji-editor-brightness','emoji-editor-contrast','emoji-editor-saturation'].some(id=>Number($('#'+id)?.value)!==Number($('#'+id)?.defaultValue))||$('#emoji-editor-mask')?.value!=='none'||$('#emoji-editor-fit')?.value!=='contain'
+}
+function renderEmojiEditor(){
+ const canvas=$('#emoji-editor-canvas'),gif=$('#emoji-editor-gif-preview'),meta=$('#emoji-editor-meta'),mini=$('#emoji-editor-mini');if(!canvas)return;
+ const size=Number($('#emoji-editor-size').value||128),ctx2=canvas.getContext('2d');canvas.width=size;canvas.height=size;ctx2.clearRect(0,0,size,size);
+ if(!emojiEditor.ready){gif.style.display='none';canvas.style.display='block';if(meta)meta.textContent='Choose an image or GIF to start.';if(mini)mini.innerHTML='';return}
+ const source=emojiEditor.img,fit=$('#emoji-editor-fit').value,scale=fit==='cover'?Math.max(size/source.naturalWidth,size/source.naturalHeight):Math.min(size/source.naturalWidth,size/source.naturalHeight),w=source.naturalWidth*scale,h=source.naturalHeight*scale,x=(size-w)/2,y=(size-h)/2,mask=$('#emoji-editor-mask').value;
+ ctx2.save();if(mask==='circle'){ctx2.beginPath();ctx2.arc(size/2,size/2,size/2,0,Math.PI*2);ctx2.clip()}else if(mask==='rounded')roundedRectPath(ctx2,0,0,size,size,Math.round(size*.18)),ctx2.clip();else if(mask==='squircle')roundedRectPath(ctx2,size*.06,size*.06,size*.88,size*.88,Math.round(size*.28)),ctx2.clip();
+ ctx2.filter=`brightness(${$('#emoji-editor-brightness').value}%) contrast(${$('#emoji-editor-contrast').value}%) saturate(${$('#emoji-editor-saturation').value}%)`;ctx2.drawImage(source,x,y,w,h);ctx2.filter='none';
+ const opacity=Number($('#emoji-editor-opacity').value||0)/100;if(opacity>0){ctx2.globalAlpha=opacity;ctx2.globalCompositeOperation=$('#emoji-editor-blend').value;ctx2.fillStyle=$('#emoji-editor-color').value;ctx2.fillRect(0,0,size,size);ctx2.globalCompositeOperation='source-over';ctx2.globalAlpha=1}
+ ctx2.restore();
+ const canKeepGif=emojiEditor.animated&&!emojiEditorEdited();gif.style.display=canKeepGif?'block':'none';canvas.style.display=canKeepGif?'none':'block';if(canKeepGif)gif.src=emojiEditor.url;
+ if(meta)meta.textContent=`${emojiEditor.file.name} -> ${size} x ${size}${emojiEditor.animated?(canKeepGif?' animated GIF preserved':' edited GIF exports as PNG'):''}`;
+ if(mini)mini.innerHTML=`<button type="button" class="drawer-emoji emoji-editor-sample"><img src="${canvas.toDataURL('image/png')}" alt=""><span>:${escapeHtml(emojiEditorName())}:</span><code>&lt;:${escapeHtml(emojiEditorName())}:preview&gt;</code></button>`
+}
+function resetEmojiEditor(){
+ for(const [id,value] of [['emoji-editor-color','#b8343f'],['emoji-editor-blend','soft-light'],['emoji-editor-opacity','0'],['emoji-editor-mask','none'],['emoji-editor-brightness','100'],['emoji-editor-contrast','100'],['emoji-editor-saturation','100'],['emoji-editor-fit','contain']])if($('#'+id))$('#'+id).value=value;
+ renderEmojiEditor()
+}
+function editedEmojiBlob(){
+ return new Promise(resolve=>$('#emoji-editor-canvas').toBlob(blob=>resolve(blob),'image/png',.95))
+}
+async function editedEmojiFile(){
+ if(!emojiEditor.file)throw Error('Choose an emoji image first');
+ if(emojiEditor.animated&&!emojiEditorEdited())return emojiEditor.file;
+ const blob=await editedEmojiBlob();if(!blob)throw Error('Could not render the edited emoji');
+ return new File([blob],`${emojiEditorName()||'edited_emoji'}.png`,{type:'image/png'})
+}
+async function saveEditedEmoji(){
+ try{const file=await editedEmojiFile(),url=URL.createObjectURL(file),a=document.createElement('a');a.href=url;a.download=file.name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Edited emoji saved')}catch(e){toast(e.message)}
+}
+async function publishEditedEmoji(){
+ const button=document.querySelector('button[onclick="publishEditedEmoji()"]');if(button)button.disabled=true;
+ try{const file=await editedEmojiFile(),x=await uploadEmojiFile(file,emojiEditorName(),$('#emoji-editor-size').value);toast(`:${x.emoji.name}: published to server`);await refreshEmojis()}catch(e){toast(e.message)}finally{if(button)button.disabled=false}
+}
+function loadEmojiEditorFile(file){
+ if(!file)return;if(emojiEditor.url)URL.revokeObjectURL(emojiEditor.url);emojiEditor={file,url:URL.createObjectURL(file),img:new Image(),ready:false,animated:/gif$/i.test(file.type)||/\.gif$/i.test(file.name)};
+ if(!$('#emoji-editor-name').value)$('#emoji-editor-name').value=emojiEditorName();emojiEditor.img.onload=()=>{emojiEditor.ready=true;renderEmojiEditor()};emojiEditor.img.onerror=()=>toast('That image could not be loaded');emojiEditor.img.src=emojiEditor.url
+}
+$('#emoji-editor-file')?.addEventListener('change',e=>loadEmojiEditorFile(e.target.files[0]));
+$$('#emoji-editor input,#emoji-editor select').forEach(i=>{if(i.type!=='file')i.addEventListener('input',renderEmojiEditor)});
