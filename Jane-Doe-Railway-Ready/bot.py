@@ -277,7 +277,7 @@ async def add_stolen_emoji(interaction,emoji_id,animated,name):
 class StealEmojiView(discord.ui.View):
     def __init__(self,emoji_id,animated,name):
         super().__init__(timeout=None); self.emoji_id=int(emoji_id); self.animated=bool(animated); self.name=name
-        button=discord.ui.Button(label="Steal emoji",emoji="📥",style=discord.ButtonStyle.primary,custom_id=f"stealemoji:add:{self.emoji_id}:{int(self.animated)}:{self.name}")
+        button=discord.ui.Button(label="Steal emoji",style=discord.ButtonStyle.primary,custom_id=f"stealemoji:add:{self.emoji_id}:{int(self.animated)}:{self.name}")
         async def clicked(interaction):await add_stolen_emoji(interaction,self.emoji_id,self.animated,self.name)
         button.callback=clicked; self.add_item(button)
 
