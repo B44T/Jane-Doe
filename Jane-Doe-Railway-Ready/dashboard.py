@@ -97,6 +97,13 @@ def message_components(gid,msg):
                 styles={1:"primary",2:"secondary",3:"success",4:"danger",5:"link"}; buttons.append({"label":child.label or "Button","emoji":str(child.emoji) if child.emoji else "","style":styles.get(child.style.value,"secondary"),"action":"link" if child.url else "response","url":child.url or "","response":"","ephemeral":True})
             elif isinstance(child,discord.SelectMenu):
                 menus.append({"placeholder":child.placeholder or "Choose an option","options":[{"label":o.label,"description":o.description or "","emoji":str(o.emoji) if o.emoji else "","response":"","ephemeral":True} for o in child.options]})
+    reaction_rows=storage.rows("SELECT emoji,role_id FROM reaction_roles WHERE guild_id=? AND message_id=? ORDER BY rowid",(gid,msg.id))
+    if reaction_rows:
+        choices=[]
+        for row in reaction_rows:
+            role=msg.guild.get_role(int(row["role_id"])) if msg.guild else None
+            choices.append({"label":role.name if role else "Role","description":"","emoji":row["emoji"],"role_id":str(row["role_id"])})
+        return {"role_panel":{"channel_id":str(msg.channel.id),"mode":"reactions","placeholder":"Choose your roles","content":msg.content,"embed":embed_to_dict(msg.embeds[0]) if msg.embeds else {},"choices":choices}}
     return {"buttons":buttons,"menus":menus}
 
 @app.get("/api/emoji/<int:emoji_id>")

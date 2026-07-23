@@ -186,10 +186,18 @@ function applyImportedMessage(spec,data){
  spec.render?.();
 }
 async function importDiscordMessage(button){
- const box=button.closest('.message-importer'),spec=messageImportSpecs.find(item=>item.key===box?.dataset.importKey),messageId=box?.querySelector('input')?.value.trim();
+ const box=button.closest('.message-importer'),spec=messageImportSpecs.find(item=>item.key===box?.dataset.importKey),messageId=box?.querySelector('input,textarea')?.value.trim();
  if(!spec||!messageId)return toast('Paste a message ID or full Discord message link');
  button.disabled=true;
  try{
+  if(spec.key==='roles'){
+   const messageIds=messageId.split(/[\s,]+/).map(x=>x.trim()).filter(Boolean);
+   const loaded=[];
+   for(const id of messageIds)loaded.push(await api(`/api/guild/${gid()}/embed/load`,'POST',{channel_id:$(spec.channel)?.value||'',message_id:id}));
+   rolePanelQueue=[];
+   loaded.forEach((data,index)=>{applyImportedMessage(spec,data);if(index<loaded.length-1)rolePanelQueue.push(currentRolePanel())});
+   renderRolePanelQueue();toast(`Loaded ${loaded.length} role panel${loaded.length===1?'':'s'} in order`);return;
+  }
   const data=await api(`/api/guild/${gid()}/embed/load`,'POST',{channel_id:$(spec.channel)?.value||'',message_id:messageId});
   applyImportedMessage(spec,data);toast(`Loaded message ${data.message_id} into this editor`);
  }catch(error){toast(error.message)}finally{button.disabled=false}
@@ -197,7 +205,7 @@ async function importDiscordMessage(button){
 function installMessageImporter(spec){
  const anchor=$(spec.anchor);if(!anchor||document.querySelector(`.message-importer[data-import-key="${spec.key}"]`))return;
  const wrap=document.createElement('div');wrap.className='message-importer';wrap.dataset.importKey=spec.key;
- wrap.innerHTML=`<label>Load existing Discord message or embed<input placeholder="Message ID or full Discord message link"></label><button type="button" class="secondary">Load into these slots</button>`;
+ wrap.innerHTML=spec.key==='roles'?`<label>Load role panels in order<textarea rows="4" placeholder="One message ID or full Discord message link per line"></textarea></label><p class="muted">Each message becomes its own queued role panel in the order entered.</p><button type="button" class="secondary">Load all in order</button>`:`<label>Load existing Discord message or embed<input placeholder="Message ID or full Discord message link"></label><button type="button" class="secondary">Load into these slots</button>`;
  (anchor.closest('label')||anchor).insertAdjacentElement('beforebegin',wrap);wrap.querySelector('button').onclick=event=>importDiscordMessage(event.currentTarget);
 }
 function installAnnouncementImporters(){
