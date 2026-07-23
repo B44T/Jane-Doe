@@ -632,10 +632,13 @@ async def on_message(message):
             active=storage.rows("SELECT message,set_at FROM afk_statuses WHERE guild_id=? AND user_id=?",(message.guild.id,member.id))
             if not active:continue
             row=active[0]
-            try:set_at=datetime.fromisoformat(row["set_at"]); timestamp=int(set_at.timestamp())
-            except (TypeError,ValueError):timestamp=int(datetime.now(timezone.utc).timestamp())
+            try:
+                set_at=datetime.fromisoformat(row["set_at"])
+                if set_at.tzinfo is None:set_at=set_at.replace(tzinfo=timezone.utc)
+                elapsed=age_text(datetime.now(timezone.utc)-set_at)
+            except (TypeError,ValueError):elapsed="0 seconds"
             view=AfkPingView(message.guild.id,member.id); bot.add_view(view)
-            await message.reply(f"**{member.display_name}** ‘’(๑－‸ ҂) is AFK: {row['message']} - <t:{timestamp}:R>",view=view,allowed_mentions=discord.AllowedMentions.none())
+            await message.reply(f"**{member.display_name}** ‘’(๑－‸ ҂) is AFK: {row['message']} - {elapsed} ago",view=view,allowed_mentions=discord.AllowedMentions.none())
         cfg=storage.get_setting(message.guild.id,"confessions",{})
         if cfg.get("enabled") and message.channel.id==int(cfg.get("channel_id") or 0):
             payloads=[]
