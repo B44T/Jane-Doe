@@ -4,7 +4,7 @@ from functools import wraps
 from flask import Flask, Response, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 import config, storage, discord, requests
-from PIL import Image, ImageOps, ImageSequence
+from PIL import Image, ImageOps, ImageSequence, ImageEnhance, ImageChops
 from bot import bot, TicketPanel, PollView, ReactionRoleView, ActionButtonView, GlueTemplateView
 from embed_utils import make_embed, has_embed_content, embed_to_dict, make_embed_with_files
 
@@ -141,6 +141,61 @@ def resized_emoji(raw,size):
         target=int(target*.8)
     raise ValueError("The resized emoji is still over Discord's 256 KB limit. Use a shorter GIF or smaller file.")
 
+def edited_emoji(raw,size,settings):
+    source=Image.open(io.BytesIO(raw)); size=max(32,min(int(size or 128),128))
+    color=settings.get("color") or "#b8343f"; color=color.lstrip("#")
+    try:tint=tuple(int(color[i:i+2],16) for i in (0,2,4))
+    except ValueError:tint=(184,52,63)
+    opacity=max(0,min(int(settings.get("opacity") or 0),100))/100
+    brightness=max(0.1,min(float(settings.get("brightness") or 100)/100,3))
+    contrast=max(0.1,min(float(settings.get("contrast") or 100)/100,3))
+    saturation=max(0,min(float(settings.get("saturation") or 100)/100,3))
+    fit=settings.get("fit") if settings.get("fit") in ("cover","contain") else "contain"
+    mask=settings.get("mask") if settings.get("mask") in ("circle","rounded","squircle") else "none"
+    blend=settings.get("blend") if settings.get("blend") in ("soft-light","overlay","multiply","screen","source-over") else "soft-light"
+    def rounded_mask(target,radius,inset=0):
+        m=Image.new("L",(target,target),0); draw=Image.new("RGBA",(target,target),(255,255,255,0))
+        from PIL import ImageDraw
+        d=ImageDraw.Draw(m); d.rounded_rectangle((inset,inset,target-inset,target-inset),radius=radius,fill=255); return m
+    def frame_canvas(frame,target):
+        frame=frame.convert("RGBA")
+        scale=(max if fit=="cover" else min)(target/frame.width,target/frame.height)
+        w,h=max(1,round(frame.width*scale)),max(1,round(frame.height*scale))
+        frame=frame.resize((w,h),Image.Resampling.LANCZOS)
+        canvas=Image.new("RGBA",(target,target),(0,0,0,0)); canvas.alpha_composite(frame,((target-w)//2,(target-h)//2))
+        alpha=canvas.getchannel("A")
+        if mask=="circle":
+            m=Image.new("L",(target,target),0)
+            from PIL import ImageDraw
+            ImageDraw.Draw(m).ellipse((0,0,target,target),fill=255); alpha=ImageChops.multiply(alpha,m)
+        elif mask=="rounded":alpha=ImageChops.multiply(alpha,rounded_mask(target,round(target*.18)))
+        elif mask=="squircle":alpha=ImageChops.multiply(alpha,rounded_mask(target,round(target*.28),round(target*.06)))
+        canvas.putalpha(alpha)
+        canvas=ImageEnhance.Brightness(canvas).enhance(brightness)
+        canvas=ImageEnhance.Contrast(canvas).enhance(contrast)
+        canvas=ImageEnhance.Color(canvas).enhance(saturation)
+        if opacity:
+            base_rgb=canvas.convert("RGB"); tint_rgb=Image.new("RGB",(target,target),tint)
+            if blend=="multiply":mixed=ImageChops.multiply(base_rgb,tint_rgb)
+            elif blend=="screen":mixed=ImageChops.screen(base_rgb,tint_rgb)
+            elif blend=="overlay" and hasattr(ImageChops,"overlay"):mixed=ImageChops.overlay(base_rgb,tint_rgb)
+            elif blend=="soft-light" and hasattr(ImageChops,"soft_light"):mixed=ImageChops.soft_light(base_rgb,tint_rgb)
+            else:mixed=tint_rgb
+            blend_alpha=alpha.point(lambda p:int(p*opacity))
+            out=Image.composite(mixed,base_rgb,blend_alpha).convert("RGBA"); out.putalpha(alpha); canvas=out
+        return canvas
+    animated=getattr(source,"is_animated",False); target=size
+    while target>=32:
+        out=io.BytesIO()
+        if animated:
+            frames=[frame_canvas(f.copy(),target) for f in ImageSequence.Iterator(source)]
+            durations=[f.info.get("duration",source.info.get("duration",80)) for f in ImageSequence.Iterator(source)]
+            frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=durations,loop=source.info.get("loop",0),disposal=2,optimize=True)
+        else:frame_canvas(source,target).save(out,"PNG",optimize=True)
+        if out.tell()<=256*1024:return out.getvalue(),animated,target
+        target=int(target*.8)
+    raise ValueError("The edited emoji is still over Discord's 256 KB limit. Use a shorter GIF or smaller file.")
+
 @app.post("/api/guild/<int:gid>/emoji/upload")
 @protected
 def emoji_upload(gid):
@@ -150,6 +205,21 @@ def emoji_upload(gid):
     try:data,animated,actual_size=resized_emoji(f.read(),request.form.get("size",128))
     except (ValueError,OSError) as e:return jsonify(error=str(e)),400
     async def work():return await g.create_custom_emoji(name=name,image=data,reason="Uploaded from Jane Doe dashboard")
+    try:e=bot.submit(work()).result(20)
+    except discord.Forbidden:return jsonify(error="Give the bot Manage Expressions permission."),403
+    except discord.HTTPException as e:return jsonify(error=e.text or "Discord rejected the emoji."),400
+    return jsonify(ok=True,emoji=emoji_json(e),animated=animated,size=actual_size)
+
+@app.post("/api/guild/<int:gid>/emoji/editor-upload")
+@protected
+def emoji_editor_upload(gid):
+    g=guild(gid); f=request.files.get("file"); name=re.sub(r"[^A-Za-z0-9_]","_",request.form.get("name","").strip())[:32]
+    if not f or not f.filename:return jsonify(error="Choose an emoji image."),400
+    if len(name)<2:return jsonify(error="Emoji names need at least two letters, numbers, or underscores."),400
+    settings={k:request.form.get(k,"") for k in ("color","blend","opacity","mask","brightness","contrast","saturation","fit")}
+    try:data,animated,actual_size=edited_emoji(f.read(),request.form.get("size",128),settings)
+    except (ValueError,OSError) as e:return jsonify(error=str(e)),400
+    async def work():return await g.create_custom_emoji(name=name,image=data,reason="Edited from Jane Doe dashboard")
     try:e=bot.submit(work()).result(20)
     except discord.Forbidden:return jsonify(error="Give the bot Manage Expressions permission."),403
     except discord.HTTPException as e:return jsonify(error=e.text or "Discord rejected the emoji."),400

@@ -375,10 +375,16 @@ async function saveEditedEmoji(){
 }
 async function publishEditedEmoji(){
  const button=document.querySelector('button[onclick="publishEditedEmoji()"]');if(button)button.disabled=true;
- try{const file=await editedEmojiFile(),x=await uploadEmojiFile(file,emojiEditorName(),$('#emoji-editor-size').value);toast(`:${x.emoji.name}: published to server`);await refreshEmojis()}catch(e){toast(e.message)}finally{if(button)button.disabled=false}
+ try{
+  if(!emojiEditor.file)throw Error('Choose an emoji image first');
+  const form=new FormData();form.append('file',emojiEditor.file);form.append('name',emojiEditorName());form.append('size',$('#emoji-editor-size').value);
+  for(const id of ['color','blend','opacity','mask','brightness','contrast','saturation','fit'])form.append(id,$(`#emoji-editor-${id}`).value);
+  const r=await fetch(`/api/guild/${gid()}/emoji/editor-upload`,{method:'POST',body:form}),x=await r.json();if(!r.ok)throw Error(x.error||'Upload failed');
+  toast(`:${x.emoji.name}: published as ${x.animated?'animated ':''}server emoji`);await refreshEmojis()
+ }catch(e){toast(e.message)}finally{if(button)button.disabled=false}
 }
 function loadEmojiEditorFile(file){
- if(!file)return;if(emojiEditor.url)URL.revokeObjectURL(emojiEditor.url);emojiEditor={file,url:URL.createObjectURL(file),img:new Image(),ready:false,animated:/gif$/i.test(file.type)||/\.gif$/i.test(file.name)};
+ if(!file)return;if(emojiEditor.url)URL.revokeObjectURL(emojiEditor.url);emojiEditor={file,url:URL.createObjectURL(file),img:new Image(),ready:false,animated:/gif|webp/i.test(file.type)||/\.(gif|webp)$/i.test(file.name)};
  if(!$('#emoji-editor-name').value)$('#emoji-editor-name').value=emojiEditorName();emojiEditor.img.onload=()=>{emojiEditor.ready=true;renderEmojiEditor()};emojiEditor.img.onerror=()=>toast('That image could not be loaded');emojiEditor.img.src=emojiEditor.url
 }
 $('#emoji-editor-file')?.addEventListener('change',e=>loadEmojiEditorFile(e.target.files[0]));
