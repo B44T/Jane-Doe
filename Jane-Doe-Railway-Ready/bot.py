@@ -90,15 +90,29 @@ async def invite_attribution(guild):
 async def action_log(guild,event,member,title,description="",fields=None,color=0xB8343F):
     cfg=storage.get_setting(guild.id,"action_logs",{})
     if not cfg.get("enabled") or not cfg.get(event):return
-    channel=guild.get_channel(int(cfg.get("channel_id") or 0))
-    if not channel:return
+    channel_id=int(cfg.get("channel_id") or 0)
+    channel=guild.get_channel_or_thread(channel_id)
+    if not channel and channel_id:
+        try:channel=await guild.fetch_channel(channel_id)
+        except (discord.NotFound,discord.Forbidden,discord.HTTPException) as error:
+            print(f"Action log channel {channel_id} unavailable in {guild.id}: {type(error).__name__}: {error}")
+            return
+    if not channel:
+        print(f"Action logs enabled in {guild.id}, but no valid log channel is configured")
+        return
     embed=discord.Embed(title=title,description=clipped(description,4096) or None,color=color,timestamp=datetime.now(timezone.utc))
     if member:
         display=getattr(member,"display_name",None) or getattr(member,"name","Unknown user"); username=getattr(member,"name","unknown")
         embed.set_author(name=f"{display} · @{username}",icon_url=str(member.display_avatar.url))
     for name,value,inline in fields or []:embed.add_field(name=name,value=clipped(value) or "None",inline=inline)
     try:await channel.send(embed=embed)
-    except (discord.Forbidden,discord.HTTPException):pass
+    except (discord.Forbidden,discord.HTTPException) as embed_error:
+        # Missing Embed Links should not disable the entire logging system.
+        details="\n".join(f"**{name}:** {clipped(value,1000)}" for name,value,_ in fields or [])
+        fallback=f"**{title}**\n{description or ''}{chr(10) if details else ''}{details}".strip()
+        try:await channel.send(clipped(fallback,2000),allowed_mentions=discord.AllowedMentions.none())
+        except (discord.Forbidden,discord.HTTPException) as text_error:
+            print(f"Action log delivery failed in {guild.id}/{channel_id}: embed={type(embed_error).__name__}: {embed_error}; text={type(text_error).__name__}: {text_error}")
 
 @bot.tree.error
 async def command_error(interaction,error):
@@ -578,7 +592,10 @@ async def on_member_join(member):
     if cfg.get("enabled") and channel:
         edata=announcement_embed(cfg,member)
         content=variables(cfg.get("content", ""),member)
-        embed,files=make_embed_with_files(edata); await channel.send(content=content or None,embed=embed,files=files)
+        try:
+            embed,files=make_embed_with_files(edata); await channel.send(content=content or None,embed=embed,files=files)
+        except (discord.Forbidden,discord.HTTPException,FileNotFoundError) as error:
+            print(f"Welcome announcement failed in {member.guild.id}: {type(error).__name__}: {error}")
     if cfg.get("invite_tracking"):
         tracking_channel=member.guild.get_channel(int(cfg.get("tracking_channel_id") or 0))
         if tracking_channel:
@@ -587,7 +604,9 @@ async def on_member_join(member):
             template=cfg.get("invite_message") or "(this user has been invited by {inviter}, who now has {inviter_invites} invites.)"
             tracked=(template.replace("{inviter}",inviter).replace("{invite_code}",code)
                      .replace("{invite_uses}",uses).replace("{inviter_invites}",uses))
-            await tracking_channel.send(content=(custom+"\n"+tracked).strip())
+            try:await tracking_channel.send(content=(custom+"\n"+tracked).strip())
+            except (discord.Forbidden,discord.HTTPException) as error:
+                print(f"Tracking welcome failed in {member.guild.id}: {type(error).__name__}: {error}")
     role=member.guild.get_role(int(cfg.get("role_id") or 0))
     if role:
         try: await member.add_roles(role,reason="Welcome role")
@@ -610,7 +629,10 @@ async def on_member_remove(member):
     cfg=storage.get_setting(member.guild.id,"leave",{}); channel=member.guild.get_channel(int(cfg.get("channel_id") or 0))
     if cfg.get("enabled") and channel:
         edata=announcement_embed(cfg,member)
-        embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content", ""),member) or None,embed=embed,files=files)
+        try:
+            embed,files=make_embed_with_files(edata); await channel.send(content=variables(cfg.get("content", ""),member) or None,embed=embed,files=files)
+        except (discord.Forbidden,discord.HTTPException,FileNotFoundError) as error:
+            print(f"Leave announcement failed in {member.guild.id}: {type(error).__name__}: {error}")
     roles=[r.mention for r in member.roles if not r.is_default()]
     await action_log(member.guild,"member_leave",member,"Member left",f"{member.mention} left **{member.guild.name}**.",[("Roles",clipped(" ".join(roles) if roles else "No roles",1024),False)],0xED4245)
 
