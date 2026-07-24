@@ -40,7 +40,7 @@ Enable **Server Members Intent** and **Message Content Intent**. Keep the bot ro
 
 - `/afk set message` — marks you AFK; pings show your reason and offer message/return-notification buttons
 - `/afk mod clearall` — clears all AFK records and pending notifications (moderators only)
-- `/birthday month day [year]`
+- `/birthday month day [year]` — saves your birthday and shares the month and day in the channel
 - `/warn member reason`
 - `/timeout member minutes [reason]`
 - `/kick member [reason]`

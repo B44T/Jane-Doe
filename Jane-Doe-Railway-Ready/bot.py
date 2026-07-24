@@ -814,7 +814,7 @@ async def birthday(interaction:discord.Interaction,month:app_commands.Range[int,
     try: datetime(year or 2000,month,day)
     except ValueError:return await interaction.response.send_message("That date is not valid.",ephemeral=True)
     storage.execute("INSERT INTO birthdays(guild_id,user_id,month,day,year) VALUES(?,?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET month=excluded.month,day=excluded.day,year=excluded.year",(interaction.guild_id,interaction.user.id,month,day,year))
-    await interaction.response.send_message(f"Birthday saved as **{month}/{day}**.",ephemeral=True)
+    await interaction.response.send_message(f"{interaction.user.mention} added their birthday: **{month}/{day}** 🎂")
 
 @bot.tree.command(description="Warn a member")
 @app_commands.check(moderator)
